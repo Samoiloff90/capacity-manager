@@ -1,3 +1,2 @@
-//! Native lifecycle for the isolated local-project storage feasibility task.
-//! The existing desktop entry point is deliberately not wired to this module.
+//! Native lifecycle and shared production IPC for local project folders.
 pub mod project_store;

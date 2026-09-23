@@ -4,6 +4,7 @@ import type { InvokeArgs } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { createProject, openProject, ProjectSnapshots, type ProjectSession } from "../src/db/project-snapshots";
 import type { QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
+import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
 
 const ipc = vi.fn<(command: string, args?: InvokeArgs) => Promise<unknown>>();
 const session: ProjectSession = {
@@ -35,6 +36,78 @@ describe("project snapshot adapter using the real SQL plugin JavaScript client",
     ipc.mockClear();
     await createProject(session.folderPath, session.name);
     expect(ipc.mock.calls).toEqual([["project_create", { folderPath: session.folderPath, name: session.name }]]);
+  });
+
+  it("renames metadata with a bound parameter, preserving project identity and folder", async () => {
+    ipc.mockResolvedValueOnce([1, 0]);
+    const project = new ProjectSnapshots(session);
+    const previousSession = project.session;
+    const name = "Команда '; DROP TABLE project_meta; --";
+    const renamed = await project.rename(`  ${name}  `);
+    expect(ipc).toHaveBeenCalledTimes(1);
+    expect(ipc.mock.calls[0]).toEqual(["plugin:sql|execute", {
+      db: session.sessionKey,
+      query: "UPDATE project_meta SET name = $1 WHERE singleton = 1 AND project_id = $2",
+      values: [name, session.projectId]
+    }]);
+    expect(renamed).toEqual({ ...session, name });
+    expect(project.session).toEqual(renamed);
+    expect(previousSession).toEqual(session);
+    expect(Object.isFrozen(project.session)).toBe(true);
+  });
+
+  it("keeps the old name after a failed rename and closes only after explicit discard", async () => {
+    ipc.mockRejectedValueOnce(new Error("Нет места на диске"));
+    const project = new ProjectSnapshots(session);
+    await expect(project.rename("Новое название")).rejects.toThrow("Нет места на диске");
+    expect(project.session).toEqual(session);
+    await expect(project.close()).rejects.toMatchObject({ code: "UNSAVED_CHANGES" });
+    expect(ipc).toHaveBeenCalledTimes(1);
+    ipc.mockResolvedValueOnce(undefined);
+    await project.close({ discardFailedWrites: true });
+    expect(ipc.mock.calls[1]).toEqual(["project_close", { sessionKey: session.sessionKey }]);
+    await expect(project.rename("После закрытия")).rejects.toMatchObject({ code: "CLOSED" });
+    expect(ipc).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not claim a rename succeeded when its metadata row was not updated", async () => {
+    ipc.mockResolvedValueOnce([0, 0]);
+    const project = new ProjectSnapshots(session);
+    await expect(project.rename("Новое название")).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(project.session.name).toBe(session.name);
+    ipc.mockResolvedValueOnce([1, 0]).mockResolvedValueOnce(undefined);
+    await project.rename("Успешная повторная запись");
+    await project.close();
+    expect(project.session.name).toBe("Успешная повторная запись");
+    expect(ipc.mock.calls[2]).toEqual(["project_close", { sessionKey: session.sessionKey }]);
+  });
+
+  it.each(["", " \t\n ", "Я".repeat(1001)].map((name) => [name.length, name] as const))(
+    "rejects an invalid name of length %s before IPC", async (_length, name) => {
+    const project = new ProjectSnapshots(session);
+    await expect(project.rename(name)).rejects.toMatchObject({ code: "INVALID_DATA" });
+    expect(project.session.name).toBe(session.name);
+    expect(ipc).not.toHaveBeenCalled();
+    ipc.mockResolvedValueOnce(undefined);
+    await project.close();
+    expect(ipc.mock.calls).toEqual([["project_close", { sessionKey: session.sessionKey }]]);
+  });
+
+  it("round-trips calendar provenance and a manual override without replacing the saved source", async () => {
+    const calendar = createQuarterCalendar(2026, 2);
+    if (!calendar.ok) throw new Error(calendar.message);
+    const input: QuarterSnapshot = {
+      ...draft(),
+      calendar: calendar.calendar.map((day) => day.date === "2026-04-04" ? { ...day, isWorking: true } : day),
+      calendarSource: { ...calendar.calendarSource, version: "saved-bundle-version" }
+    };
+    ipc.mockResolvedValueOnce([1, 0]).mockResolvedValueOnce([row({ payload_json: JSON.stringify(input) })]);
+    const project = new ProjectSnapshots(session);
+    const created = await project.create("plan-a", input);
+    expect(created.snapshot.calendarSource).toEqual(input.calendarSource);
+    const written = JSON.parse((ipc.mock.calls[0][1] as { values: unknown[] }).values[4] as string);
+    expect(written.calendarSource).toEqual(input.calendarSource);
+    expect((await project.get("plan-a"))?.snapshot).toEqual(input);
   });
 
   it("writes a detached quarter in one parameterized statement and accepts a calendar draft", async () => {

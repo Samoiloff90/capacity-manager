@@ -71,7 +71,8 @@ const columns = "plan_id, year, quarter, revision, payload_version, payload_json
 
 /** Uses only an already opened native session; never calls plugin load/close. */
 export class ProjectSnapshots {
-  readonly session: Readonly<ProjectSession>;
+  private currentSession: Readonly<ProjectSession>;
+  get session(): Readonly<ProjectSession> { return this.currentSession; }
   private readonly database: Database;
   private tail: Promise<void> = Promise.resolve();
   private state: "open" | "closing" | "closed" = "open";
@@ -79,7 +80,7 @@ export class ProjectSnapshots {
   private closing: Promise<void> | null = null;
 
   constructor(session: ProjectSession) {
-    this.session = Object.freeze(sessionSchema.parse(session));
+    this.currentSession = Object.freeze(sessionSchema.parse(session));
     this.database = Database.get(this.session.sessionKey);
   }
 
@@ -107,6 +108,22 @@ export class ProjectSnapshots {
     return this.enqueue(async () => {
       const rows = await this.database.select<unknown[]>(`SELECT ${columns} FROM quarter_plans ORDER BY year, quarter`);
       return rows.map(decodeRow);
+    });
+  }
+
+  async rename(name: string): Promise<Readonly<ProjectSession>> {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.length > 1000) {
+      throw new ProjectPersistenceError("INVALID_DATA", "Название команды должно содержать от 1 до 1000 символов.");
+    }
+    return this.write("project-name", async () => {
+      const result = await this.database.execute(
+        "UPDATE project_meta SET name = $1 WHERE singleton = 1 AND project_id = $2",
+        [trimmed, this.session.projectId]
+      );
+      if (result.rowsAffected !== 1) throw new ProjectPersistenceError("CONFLICT", "Не удалось изменить название команды.");
+      this.currentSession = Object.freeze({ ...this.session, name: trimmed });
+      return this.session;
     });
   }
 

@@ -1,12 +1,11 @@
-use capacity_planner::project_store::legacy_compat;
+use capacity_planner::project_store::commands;
 
 fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        // Compatibility validation/migration must finish before SQL preload.
-        .plugin(legacy_compat::init())
-        .plugin(tauri_plugin_sql::Builder::default().build())
+    commands::configure(tauri::Builder::default())
+        .setup(|app| {
+            commands::build_main_window(app)?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

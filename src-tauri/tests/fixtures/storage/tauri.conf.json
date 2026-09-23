@@ -4,15 +4,9 @@
   "version": "0.1.0",
   "identifier": "local.capacity-planner.storage-test",
   "app": {
-    "windows": [],
+    "windows": [{ "label": "main", "create": false }],
     "security": {
-      "capabilities": [
-        {
-          "identifier": "storage-test",
-          "windows": ["storage-test"],
-          "permissions": ["sql:allow-select", "sql:allow-execute"]
-        }
-      ]
+      "capabilities": ["default"]
     }
   },
   "bundle": { "active": false, "icon": ["../../../icons/icon.ico"] },

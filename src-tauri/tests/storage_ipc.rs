@@ -1,47 +1,10 @@
 //! Uses Tauri's mock window runtime, but real IPC dispatch/ACL, SQL plugin and SQLite.
 //! This does not claim native WebView or portable-release validation.
-use capacity_planner::project_store::{ProjectSession, ProjectStore};
+use capacity_planner::project_store::commands;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tauri::{ipc::InvokeBody, test::MockRuntime, Manager, State};
+use tauri::{ipc::InvokeBody, test::MockRuntime, Manager};
 use tauri_plugin_sql::DbInstances;
-
-#[tauri::command]
-async fn project_create(
-    store: State<'_, ProjectStore>,
-    instances: State<'_, DbInstances>,
-    folder_path: String,
-    name: String,
-) -> Result<ProjectSession, String> {
-    store
-        .create(&instances, PathBuf::from(folder_path), name)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn project_open(
-    store: State<'_, ProjectStore>,
-    instances: State<'_, DbInstances>,
-    folder_path: String,
-) -> Result<ProjectSession, String> {
-    store
-        .open(&instances, PathBuf::from(folder_path))
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn project_close(
-    store: State<'_, ProjectStore>,
-    instances: State<'_, DbInstances>,
-    session_key: String,
-) -> Result<(), String> {
-    store
-        .close(&instances, &session_key)
-        .await
-        .map_err(|e| e.to_string())
-}
 
 struct TempProject(PathBuf);
 impl TempProject {
@@ -70,19 +33,31 @@ fn request(
     command: &str,
     body: Value,
 ) -> Result<Value, Value> {
+    request_from(
+        view,
+        if cfg!(windows) {
+            "http://tauri.localhost"
+        } else {
+            "tauri://localhost"
+        },
+        command,
+        body,
+    )
+}
+
+fn request_from(
+    view: &tauri::WebviewWindow<MockRuntime>,
+    origin: &str,
+    command: &str,
+    body: Value,
+) -> Result<Value, Value> {
     tauri::test::get_ipc_response(
         view,
         tauri::webview::InvokeRequest {
             cmd: command.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: if cfg!(windows) {
-                "http://tauri.localhost"
-            } else {
-                "tauri://localhost"
-            }
-            .parse()
-            .unwrap(),
+            url: origin.parse().unwrap(),
             body: InvokeBody::Json(body),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.to_string(),
@@ -96,22 +71,54 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
     let temp = TempProject::new();
     let folder = temp.0.join("Команда А % # пробел");
     std::fs::create_dir(&folder).unwrap();
-    let app = tauri::test::mock_builder()
-        .manage(ProjectStore::new())
-        .plugin(tauri_plugin_sql::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![
-            project_create,
-            project_open,
-            project_close
-        ])
+    let app = commands::configure(tauri::test::mock_builder())
         .build(tauri::generate_context!(
             "tests/fixtures/storage/tauri.conf.json"
         ))
         .expect("build isolated context without legacy preload");
-    let view = tauri::WebviewWindowBuilder::new(&app, "storage-test", Default::default())
-        .build()
-        .unwrap();
+    let view = commands::build_main_window(&app).unwrap();
     assert!(tauri::async_runtime::block_on(app.state::<DbInstances>().0.read()).is_empty());
+
+    // Remote origins get neither SQL nor custom project lifecycle commands.
+    for (command, body) in [
+        (
+            "project_create",
+            json!({"folderPath":folder,"name":"Недопустимый запрос"}),
+        ),
+        (
+            "plugin:sql|select",
+            json!({"db":"missing","query":"SELECT 1","values":[]}),
+        ),
+    ] {
+        let error = request_from(&view, "https://example.invalid", command, body).unwrap_err();
+        assert!(error.to_string().contains("not allowed"), "{error}");
+    }
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
+    for command in [
+        "plugin:webview|create_webview_window",
+        "plugin:window|create",
+        "plugin:fs|read_text_file",
+        "plugin:dialog|message",
+        "plugin:dialog|save",
+    ] {
+        let error = request(&view, command, json!({})).unwrap_err();
+        assert!(
+            error.to_string().contains("not allowed"),
+            "{command}: {error}"
+        );
+    }
+    let other_view =
+        tauri::WebviewWindowBuilder::new(&app, "untrusted-test-window", Default::default())
+            .build()
+            .unwrap();
+    let error = request(
+        &other_view,
+        "project_create",
+        json!({"folderPath":folder,"name":"Другое окно"}),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("главном окне"), "{error}");
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
 
     let forbidden = temp.0.join("must-not-be-created.sqlite");
     let error = request(

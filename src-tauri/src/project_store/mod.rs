@@ -1,5 +1,6 @@
 //! Project lifecycle only; quarter business reads/CAS writes belong to src/db.
 //! Never call the plugin's auto-creating `load` for a selected project.
+pub mod commands;
 pub mod legacy_compat;
 mod preflight;
 mod schema;

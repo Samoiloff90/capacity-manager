@@ -1,10 +1,19 @@
 import type { Quarter } from "./calendar-quarter";
 
+/** Frozen provenance of a saved plan. Resolved calendar dates remain authoritative. */
+export type CalendarSource = Readonly<{
+  kind: "ru-official" | "manual";
+  version: string;
+  baseWorkingDates: readonly string[];
+  sourceUrls?: readonly string[];
+}>;
+
 /** All numeric strings are canonical finite decimals; percentage 20 means 20%, not 0.2. */
 export type QuarterSnapshot = Readonly<{
   year: number;
   quarter: Quarter;
   calendar: readonly Readonly<{ date: string; isWorking: boolean }>[];
+  calendarSource?: CalendarSource;
   competencies: readonly Readonly<{ id: string; name: string }>[];
   members: readonly Readonly<{ id: string; name: string; competencyId: string; fte: string }>[];
   absences: readonly Readonly<{ id: string; memberId: string; startDate: string; endDate: string }>[];

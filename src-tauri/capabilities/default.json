@@ -1,12 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop capability for Capacity Planner",
+  "description": "Local main window: project SQL, directory selection and guarded close",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "sql:default",
-    "sql:allow-load",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "dialog:allow-open",
     "sql:allow-execute",
     "sql:allow-select"
   ]

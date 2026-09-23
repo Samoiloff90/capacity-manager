@@ -1,0 +1,134 @@
+.project-app {
+  min-height: 100vh;
+  background: #f5f7fb;
+  color: #172033;
+}
+
+.project-app button {
+  align-items: center;
+  background: #1d5fd1;
+  border: 1px solid transparent;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 7px;
+  justify-content: center;
+  min-height: 36px;
+  padding: 7px 13px;
+}
+
+.project-app button.secondary { background: #fff; border-color: #d5deea; color: #24476f; }
+.project-app button.danger { background: #fff5f5; border-color: #f0d0d0; color: #a62929; }
+.project-app button:disabled { cursor: not-allowed; opacity: .5; }
+.project-app button:not(:disabled):hover { filter: brightness(.96); }
+.project-app button:focus-visible,
+.project-app input:focus-visible,
+.project-app select:focus-visible { outline: 3px solid #a8c9ff; outline-offset: 2px; }
+.project-app input, .project-app select { max-width: 100%; }
+.project-app input:disabled, .project-app select:disabled { background: #f2f4f8; color: #667085; }
+.project-app input[type="checkbox"] { accent-color: #1d5fd1; height: 17px; min-height: 17px; width: 17px; }
+.project-app label { color: #475467; display: grid; font-size: 13px; gap: 6px; }
+.project-app .project-checkbox { align-items: center; display: flex; gap: 9px; }
+.project-app fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }
+.project-app .project-muted { color: #667085; font-size: 13px; }
+.project-app .project-number { font-variant-numeric: tabular-nums; text-align: right; }
+.project-app .project-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; }
+.project-app .project-spacer { margin-left: auto; }
+.project-app .project-stack { display: grid; gap: 16px; }
+
+.project-welcome { margin: 0 auto; max-width: 1020px; padding: 56px 28px; }
+.project-welcome > header { margin-bottom: 30px; }
+.project-welcome h1 { font-size: 30px; margin-bottom: 10px; }
+.project-welcome-grid { display: grid; gap: 22px; grid-template-columns: 1fr 1fr; }
+.project-card { background: #fff; border: 1px solid #dfe6f0; border-radius: 10px; padding: 22px; }
+.project-card h2 { font-size: 19px; margin-bottom: 10px; }
+.project-card p + form { margin-top: 20px; }
+.project-card .project-actions { margin-top: 8px; }
+.project-welcome-note { margin-top: 24px; }
+
+.project-topbar {
+  align-items: center;
+  background: #fff;
+  border-bottom: 1px solid #dfe6f0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 18px 28px;
+}
+.project-title { flex: 1; min-width: 240px; }
+.project-title h1 { font-size: 24px; overflow-wrap: anywhere; }
+.project-title .project-path { color: #667085; font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
+.project-status { border-radius: 20px; font-size: 12px; padding: 5px 10px; white-space: nowrap; }
+.project-status.saved { background: #e8f5ed; color: #1f6a40; }
+.project-status.dirty { background: #fff3d9; color: #875813; }
+.project-content { margin: 0 auto; max-width: 1600px; padding: 24px 28px 40px; }
+.project-period-bar { align-items: end; display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
+.project-period-bar .project-year { width: 115px; }
+.project-period-bar .project-plan-select { min-width: 200px; }
+.project-inline-form { align-items: end; display: flex; flex-wrap: wrap; gap: 10px; }
+.project-inline-form input { min-width: 180px; }
+.project-rename { margin-bottom: 18px; }
+.project-calendar-sources { margin-top: 10px; }
+.project-calendar-sources summary { cursor: pointer; }
+.project-calendar-sources p { overflow-wrap: anywhere; }
+
+.project-summary { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 20px 0; }
+.project-summary-card { background: #fff; border: 1px solid #dfe6f0; border-radius: 8px; padding: 16px 18px; }
+.project-summary-card > span { color: #667085; display: block; font-size: 13px; }
+.project-summary-card > strong { display: block; font-size: 26px; font-variant-numeric: tabular-nums; margin: 5px 0; overflow-wrap: anywhere; }
+.project-tabs { border-bottom: 1px solid #d8e1ed; display: flex; gap: 4px; margin-bottom: 20px; overflow-x: auto; }
+.project-app .project-tabs button { background: transparent; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; color: #526071; padding: 12px 17px; white-space: nowrap; }
+.project-app .project-tabs button[aria-selected="true"] { background: #eaf1fe; border-bottom-color: #1d5fd1; color: #164fae; font-weight: 700; }
+.project-section-heading { align-items: start; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; margin-bottom: 16px; }
+.project-section-heading h2 { font-size: 20px; margin-bottom: 5px; }
+.project-table { border-collapse: collapse; width: 100%; }
+.project-table th, .project-table td { border-bottom: 1px solid #e7edf5; font-size: 13px; padding: 9px 10px; text-align: left; vertical-align: middle; }
+.project-table th { background: #f7f9fc; color: #526071; font-weight: 600; white-space: nowrap; }
+.project-table td input, .project-table td select { min-width: 100px; width: 100%; }
+.project-table .project-wide-input { min-width: 200px; }
+.project-table .project-decimal-input { min-width: 75px; width: 100px; }
+.project-table .project-row-action { width: 1%; }
+.project-table .project-row-action button { font-size: 12px; min-height: 32px; white-space: nowrap; }
+.project-table .project-number { text-align: right; }
+.project-table tr:last-child td { border-bottom: 0; }
+.project-table-empty { color: #667085; padding: 22px !important; text-align: center !important; }
+.project-table-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.project-two-columns { display: grid; gap: 20px; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); }
+.project-competencies { margin-top: 22px; }
+.project-competencies h3 { font-size: 16px; margin: 0 0 10px; }
+.project-competency-items { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.project-competency-item { align-items: center; background: #eef3fb; border-radius: 6px; display: flex; gap: 8px; padding: 6px 10px; }
+.project-app .project-competency-item button { background: transparent; color: #526071; min-height: 24px; padding: 0 4px; }
+
+.project-message { border: 1px solid #c9dbf9; border-radius: 7px; color: #254b7d; background: #eef5ff; line-height: 1.5; margin-bottom: 16px; padding: 12px 15px; }
+.project-message.warning { background: #fff8e7; border-color: #eed69b; color: #805815; }
+.project-message.error { background: #fff0f0; border-color: #f0c5c5; color: #9b1c1c; }
+.project-message p { color: inherit; }
+.project-message ul { margin: 7px 0 0; padding-left: 20px; }
+.project-message .project-actions { margin-top: 10px; }
+.project-calendar-months { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.project-calendar-month { background: #fff; border: 1px solid #dfe6f0; border-radius: 8px; overflow: hidden; }
+.project-calendar-month h3 { background: #f7f9fc; border-bottom: 1px solid #e7edf5; font-size: 16px; margin: 0; padding: 12px 14px; text-transform: capitalize; }
+.project-calendar-month .project-table td { padding: 6px 10px; }
+.project-calendar-month .project-table tr.non-working { background: #f8f9fc; color: #7c8798; }
+.project-calendar-month .project-table td input { min-width: 17px; width: 17px; }
+.project-calendar-legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0 18px; }
+.project-calendar-legend span { color: #667085; font-size: 13px; }
+.project-confirmation { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.project-modal-backdrop { align-items: center; background: rgba(23, 32, 51, .42); display: flex; inset: 0; justify-content: center; padding: 24px; position: fixed; z-index: 100; }
+.project-modal { background: #fff; border: 1px solid #dfe6f0; border-radius: 12px; box-shadow: 0 16px 48px #17203333; max-width: 520px; padding: 26px; width: 100%; }
+.project-modal h2 { font-size: 21px; }
+.project-modal .project-actions { justify-content: flex-end; margin-top: 22px; }
+
+@media (max-width: 1100px) {
+  .project-two-columns { grid-template-columns: 1fr; }
+  .project-content { padding: 20px; }
+  .project-topbar { padding: 16px 20px; }
+}
+@media (max-width: 760px) {
+  .project-welcome { padding: 28px 18px; }
+  .project-welcome-grid, .project-summary, .project-calendar-months { grid-template-columns: 1fr; }
+  .project-content { padding: 16px; }
+  .project-spacer { margin-left: 0 !important; }
+}

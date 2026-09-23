@@ -34,6 +34,12 @@ const structure = z.object({
   year: z.number().refine(isCalendarYear, "Год должен помещаться в формат ГГГГ: от 0001 до 9999"),
   quarter: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   calendar: z.array(z.object({ date, isWorking: z.boolean() }).strict()).max(92),
+  calendarSource: z.object({
+    kind: z.enum(["ru-official", "manual"]),
+    version: id,
+    baseWorkingDates: z.array(date).max(92),
+    sourceUrls: z.array(z.string().max(2048).url().refine((value) => /^https?:\/\//.test(value), "Ожидается HTTP(S) ссылка на источник")).max(8).optional()
+  }).strict().optional(),
   competencies: z.array(z.object({ id, name }).strict()),
   members: z.array(z.object({ id, name, competencyId: id, fte: nonnegativeDecimal("1") }).strict()),
   absences: z.array(z.object({ id, memberId: id, startDate: date, endDate: date }).strict()),
@@ -50,6 +56,15 @@ const payloadSize = z.unknown().superRefine((value, context) => {
     const limit = field === "calendar" ? 92 : QUARTER_INPUT_LIMITS.entitiesPerCollection;
     if (Array.isArray(rows) && rows.length > limit) {
       context.addIssue({ code: z.ZodIssueCode.custom, fatal: true, path: [field], message: `Превышен технический предел размера списка: ${limit}` });
+    }
+  }
+  const source = record.calendarSource;
+  if (typeof source === "object" && source !== null) {
+    for (const [field, limit] of [["baseWorkingDates", 92], ["sourceUrls", 8]] as const) {
+      const rows = (source as Record<string, unknown>)[field];
+      if (Array.isArray(rows) && rows.length > limit) {
+        context.addIssue({ code: z.ZodIssueCode.custom, fatal: true, path: ["calendarSource", field], message: `Превышен технический предел размера списка: ${limit}` });
+      }
     }
   }
 });
@@ -102,6 +117,16 @@ export const quarterSnapshotSchema = payloadSize.pipe(structure).superRefine((sn
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["calendar", index, "date"], message: "Дата календаря повторяется" });
     }
     seenDates.add(day.date);
+  });
+  const seenBaseDates = new Set<string>();
+  snapshot.calendarSource?.baseWorkingDates.forEach((day, index) => {
+    if (!expectedDates.has(day)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["calendarSource", "baseWorkingDates", index], message: "Дата исходного календаря не принадлежит выбранному кварталу" });
+    }
+    if (seenBaseDates.has(day)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["calendarSource", "baseWorkingDates", index], message: "Дата исходного календаря повторяется" });
+    }
+    seenBaseDates.add(day);
   });
 });
 

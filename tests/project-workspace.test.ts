@@ -1,0 +1,392 @@
+import { describe, expect, it, vi } from "vitest";
+import { ProjectWorkspaceController, type WorkspaceRepository } from "../src/app/project-workspace-controller";
+import { ProjectPersistenceError, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
+import type { Quarter } from "../src/domain/capacity/calendar-quarter";
+import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
+import type { QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
+
+const folderA = "D:\\Команды\\папка А";
+const folderB = "D:\\Команды\\папка Б";
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => { resolve = accept; reject = decline; });
+  return { promise, resolve, reject };
+}
+
+function savedPlan(planId: string, quarter: Quarter): StoredQuarterPlan {
+  const calendar = createQuarterCalendar(2026, quarter);
+  if (!calendar.ok) throw new Error(calendar.message);
+  return {
+    planId, revision: 1,
+    snapshot: {
+      year: 2026, quarter, calendar: calendar.calendar, calendarSource: calendar.calendarSource,
+      competencies: [{ id: "dev", name: "Разработка" }],
+      members: [{ id: "person", name: "Участник", competencyId: "dev", fte: "1" }],
+      absences: [], directions: [], tasks: []
+    }
+  };
+}
+
+/** Deliberately no validation here: the controller must reject invalid drafts before writing. */
+class MemoryRepository implements WorkspaceRepository {
+  session: ProjectSession;
+  readonly rows: Map<string, StoredQuarterPlan>;
+
+  constructor(plans: StoredQuarterPlan[] = [savedPlan("q1", 1), savedPlan("q2", 2)]) {
+    this.session = {
+      sessionKey: "session-a", projectId: "project-a", name: "Команда А",
+      folderPath: folderA, schemaVersion: 1, sqliteVersion: "test"
+    };
+    this.rows = new Map(plans.map((plan) => [plan.planId, clone(plan)]));
+  }
+
+  list = vi.fn(async (): Promise<StoredQuarterPlan[]> => clone([...this.rows.values()]));
+
+  create = vi.fn(async (planId: string, input: unknown): Promise<StoredQuarterPlan> => {
+    const saved = { planId, revision: 1, snapshot: clone(input as QuarterSnapshot) };
+    this.rows.set(planId, saved);
+    return clone(saved);
+  });
+
+  save = vi.fn(async (planId: string, expectedRevision: number, input: unknown): Promise<StoredQuarterPlan> => {
+    const previous = this.rows.get(planId);
+    if (!previous || previous.revision !== expectedRevision) {
+      throw new ProjectPersistenceError("CONFLICT", "План уже изменён");
+    }
+    const saved = { planId, revision: expectedRevision + 1, snapshot: clone(input as QuarterSnapshot) };
+    this.rows.set(planId, saved);
+    return clone(saved);
+  });
+
+  close = vi.fn(async (_options?: { discardFailedWrites?: boolean }): Promise<void> => {});
+
+  rename = vi.fn(async (name: string): Promise<Readonly<ProjectSession>> => {
+    this.session = { ...this.session, name };
+    return clone(this.session);
+  });
+}
+
+function workspace(repository = new MemoryRepository(), confirmDiscard?: (message: string) => Promise<boolean>) {
+  const preferences = new Map<string, string>();
+  const createProject = vi.fn(async (_folder: string, _name: string): Promise<WorkspaceRepository> => repository);
+  const openProject = vi.fn(async (_folder: string): Promise<WorkspaceRepository> => repository);
+  let nextId = 0;
+  const dependencies = {
+    createProject, openProject, id: () => `generated-${++nextId}`, confirmDiscard,
+    readSelectedPlan: (projectId: string) => preferences.get(projectId) ?? null,
+    writeSelectedPlan: (projectId: string, planId: string) => { preferences.set(projectId, planId); }
+  };
+  return { controller: new ProjectWorkspaceController(dependencies), dependencies, repository, preferences };
+}
+
+function changeFte(controller: ProjectWorkspaceController, fte: string) {
+  controller.actions.updateDraft((draft) => ({
+    ...draft, members: draft.members.map((member) => ({ ...member, fte }))
+  }));
+}
+
+describe("project workspace lifecycle and unsaved changes", () => {
+  it("blocks opening, editing and persistence until desktop close protection is ready", async () => {
+    const { controller, repository, dependencies } = workspace();
+    expect(controller.getSnapshot().closeProtectionReady).toBe(true);
+    controller.actions.setCloseProtectionReady(false);
+    expect(await controller.actions.createProject(folderA, "Команда А")).toBe(false);
+    expect(await controller.actions.openProject(folderA)).toBe(false);
+    expect(dependencies.createProject).not.toHaveBeenCalled();
+    expect(dependencies.openProject).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().project).toBeNull();
+
+    controller.actions.setCloseProtectionReady(true);
+    expect(await controller.actions.openProject(folderA)).toBe(true);
+    await controller.actions.selectPlan("q1");
+    const original = clone(controller.getSnapshot().draft);
+    controller.actions.setCloseProtectionReady(false);
+    changeFte(controller, "0.5");
+    expect(controller.getSnapshot().draft).toEqual(original);
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(await controller.actions.save()).toBe(false);
+    expect(await controller.actions.renameProject("Новое название")).toBe(false);
+    expect(await controller.actions.createPlan(2026, 3)).toBe(false);
+    expect(await controller.actions.selectPlan("q2")).toBe(false);
+    expect(await controller.actions.closeProject()).toBe(false);
+    expect(controller.getSnapshot().activePlanId).toBe("q1");
+    expect(controller.getSnapshot().project?.projectId).toBe(repository.session.projectId);
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(repository.save).not.toHaveBeenCalled();
+    expect(repository.rename).not.toHaveBeenCalled();
+    expect(repository.close).not.toHaveBeenCalled();
+
+    controller.actions.setCloseProtectionReady(true);
+    changeFte(controller, "0.5");
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("0.5");
+    expect(await controller.actions.closeProject()).toBe(true);
+  });
+
+  it("persists a new quarter with a complete pinned calendar; unsupported years require manual mode", async () => {
+    const { controller, repository } = workspace(new MemoryRepository([]));
+    expect(await controller.actions.createProject(folderA, "Команда А")).toBe(true);
+    expect(await controller.actions.createPlan(2026, 2, "ru-official")).toBe(true);
+    expect(repository.create).toHaveBeenCalledTimes(1);
+    const stored = [...repository.rows.values()][0];
+    const calendar = createQuarterCalendar(2026, 2);
+    if (!calendar.ok) throw new Error(calendar.message);
+    expect(stored.snapshot.calendar).toEqual(calendar.calendar);
+    expect(stored.snapshot.calendarSource).toEqual(calendar.calendarSource);
+    expect(stored.snapshot.competencies).toHaveLength(6);
+    expect(stored.snapshot).toMatchObject({ members: [], directions: [], absences: [], tasks: [] });
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(controller.getSnapshot().activePlanId).toBe(stored.planId);
+
+    expect(await controller.actions.createPlan(2027, 1, "ru-official")).toBe(false);
+    expect(repository.create).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().error).toBeTruthy();
+    expect(await controller.actions.createPlan(2027, 1, "manual")).toBe(true);
+    expect(controller.getSnapshot().draft?.calendarSource?.kind).toBe("manual");
+    expect(controller.getSnapshot().draft?.calendar).toHaveLength(90);
+  });
+
+  it("reopens the selected saved quarter, calculates its draft, and keeps another plan unchanged", async () => {
+    const { controller, repository, dependencies, preferences } = workspace();
+    preferences.set(repository.session.projectId, "q2");
+    const originalQ1 = clone(repository.rows.get("q1"));
+    expect(await controller.actions.openProject(folderA)).toBe(true);
+    expect(controller.getSnapshot().activePlanId).toBe("q2");
+    changeFte(controller, "0.5");
+    const calculation = controller.getSnapshot().calculation;
+    expect(calculation?.ok).toBe(true);
+    if (calculation?.ok) expect(calculation.result.totals.availableHours).toBe("248");
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.rows.get("q1")).toEqual(originalQ1);
+    expect(await controller.actions.closeProject()).toBe(true);
+
+    const reopened = new ProjectWorkspaceController(dependencies);
+    expect(await reopened.actions.openProject(folderA)).toBe(true);
+    expect(reopened.getSnapshot().activePlanId).toBe("q2");
+    expect(reopened.getSnapshot().draft?.members[0].fte).toBe("0.5");
+    expect(reopened.getSnapshot().draft?.calendarSource).toEqual(repository.rows.get("q2")?.snapshot.calendarSource);
+    expect(await reopened.actions.selectPlan("q1")).toBe(true);
+    expect(reopened.getSnapshot().draft?.members[0].fte).toBe("1");
+    expect(preferences.get(repository.session.projectId)).toBe("q1");
+  });
+
+  it("selects an existing manual 2027 plan without requiring or regenerating an official calendar", async () => {
+    const manual = createQuarterCalendar(2027, 1, "manual");
+    if (!manual.ok) throw new Error(manual.message);
+    const saved = savedPlan("manual-2027", 1);
+    saved.snapshot = {
+      ...saved.snapshot, year: 2027,
+      calendar: manual.calendar.map((day) => day.date === "2027-01-01" ? { ...day, isWorking: false } : day),
+      calendarSource: { ...manual.calendarSource, version: "original-manual-calendar" }
+    };
+    const { controller, repository } = workspace(new MemoryRepository([savedPlan("q2", 2), saved]));
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q2");
+    expect(controller.getSnapshot().activePlanId).toBe("q2");
+    // Official 2027 is intentionally unavailable; this request refers to an existing plan.
+    expect(await controller.actions.createPlan(2027, 1)).toBe(true);
+    expect(controller.getSnapshot().activePlanId).toBe(saved.planId);
+    expect(controller.getSnapshot().draft).toEqual(saved.snapshot);
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it("does not mark edits made during a save as saved and uses the returned revision next time", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    repository.save.mockImplementationOnce(async (planId, revision, input) => {
+      const snapshot = clone(input as QuarterSnapshot);
+      started.resolve();
+      await finish.promise;
+      const saved = { planId, revision: revision + 1, snapshot };
+      repository.rows.set(planId, saved);
+      return clone(saved);
+    });
+    const saving = controller.actions.save();
+    await started.promise;
+    changeFte(controller, "0.75");
+    finish.resolve();
+    expect(await saving).toBe(true);
+    expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("0.5");
+    expect(controller.getSnapshot().draft?.members[0].fte).toBe("0.75");
+    expect(controller.getSnapshot().dirty).toBe(true);
+
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.save.mock.calls[1][1]).toBe(2);
+    expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("0.75");
+    expect(controller.getSnapshot().dirty).toBe(false);
+  });
+
+  it.each([
+    new Error("Нет места на диске"), new ProjectPersistenceError("CONFLICT", "План уже изменён")
+  ])("keeps the draft and persisted revision after save failure: %s", async (error) => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    const draft = clone(controller.getSnapshot().draft);
+    repository.save.mockRejectedValueOnce(error);
+    expect(await controller.actions.save()).toBe(false);
+    expect(controller.getSnapshot().draft).toEqual(draft);
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(controller.getSnapshot().error).toBeTruthy();
+    expect(repository.rows.get("q1")?.revision).toBe(1);
+    expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("1");
+  });
+
+  it("blocks invalid FTE, invalid absence dates and raw pending form values before persistence", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0,5");
+    expect(await controller.actions.save()).toBe(false);
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(controller.getSnapshot().error).toBeTruthy();
+    controller.actions.updateDraft((draft) => ({
+      ...draft, members: draft.members.map((member) => ({ ...member, fte: "0.5" })),
+      absences: [{ id: "absence", memberId: "person", startDate: "2026-02-30", endDate: "2026-03-01" }]
+    }));
+    expect(await controller.actions.save()).toBe(false);
+    controller.actions.updateDraft((draft) => ({ ...draft, absences: [] }));
+    controller.actions.setPendingFormDirty("unparsed-fte", true);
+    expect(await controller.actions.save()).toBe(false);
+    expect(repository.save).not.toHaveBeenCalled();
+    controller.actions.setPendingFormDirty("unparsed-fte", false);
+    expect(await controller.actions.save()).toBe(true);
+  });
+
+  it("cancelled quarter switching and closing preserve the active draft and session", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    const draft = clone(controller.getSnapshot().draft);
+    const switching = controller.actions.selectPlan("q2");
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toBeTruthy());
+    controller.actions.answerDiscard(false);
+    expect(await switching).toBe(false);
+    expect(controller.getSnapshot().activePlanId).toBe("q1");
+    const closing = controller.actions.closeProject();
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toBeTruthy());
+    controller.actions.answerDiscard(false);
+    expect(await closing).toBe(false);
+    expect(controller.getSnapshot().draft).toEqual(draft);
+    expect(controller.getSnapshot().project?.projectId).toBe(repository.session.projectId);
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(repository.close).not.toHaveBeenCalled();
+  });
+
+  it("explicit discard of a failed write closes with discardFailedWrites and clears the workspace", async () => {
+    const confirm = vi.fn(async () => true);
+    const { controller, repository } = workspace(new MemoryRepository(), confirm);
+    await controller.actions.openProject(folderA);
+    changeFte(controller, "0.5");
+    repository.save.mockRejectedValueOnce(new Error("Ошибка записи"));
+    expect(await controller.actions.save()).toBe(false);
+    expect(await controller.actions.closeProject()).toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(repository.close).toHaveBeenCalledWith({ discardFailedWrites: true });
+    expect(controller.getSnapshot().project).toBeNull();
+    expect(controller.getSnapshot().draft).toBeNull();
+    expect(controller.getSnapshot().dirty).toBe(false);
+  });
+
+  it("failed opening keeps the previous draft; another lifecycle request cannot overtake it", async () => {
+    const { controller, repository, dependencies } = workspace(new MemoryRepository(), async () => true);
+    await controller.actions.openProject(folderA);
+    changeFte(controller, "0.5");
+    const draft = clone(controller.getSnapshot().draft);
+    const started = deferred<void>();
+    const opening = deferred<WorkspaceRepository>();
+    dependencies.openProject.mockImplementationOnce(async () => {
+      started.resolve();
+      return opening.promise;
+    });
+    const attempt = controller.actions.openProject(folderB);
+    await started.promise;
+    expect(await controller.actions.openProject("D:\\Другая папка")).toBe(false);
+    opening.reject(new Error("Файл повреждён"));
+    expect(await attempt).toBe(false);
+    expect(controller.getSnapshot().project?.folderPath).toBe(folderA);
+    expect(controller.getSnapshot().draft).toEqual(draft);
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(controller.getSnapshot().error).toBeTruthy();
+    expect(repository.close).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a project closed when repository close fails", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    const draft = clone(controller.getSnapshot().draft);
+    repository.close.mockRejectedValueOnce(new Error("Не удалось закрыть соединение"));
+    expect(await controller.actions.closeProject()).toBe(false);
+    expect(controller.getSnapshot().project?.projectId).toBe(repository.session.projectId);
+    expect(controller.getSnapshot().draft).toEqual(draft);
+    expect(controller.getSnapshot().error).toBeTruthy();
+    expect(await controller.actions.closeProject()).toBe(true);
+  });
+
+  it.each(["candidate-list", "old-close"] as const)(
+    "closes the candidate and preserves the previous draft when %s fails", async (failure) => {
+      const { controller, repository, dependencies } = workspace(new MemoryRepository(), async () => true);
+      await controller.actions.openProject(folderA);
+      await controller.actions.selectPlan("q1");
+      changeFte(controller, "0.5");
+      const previous = clone(controller.getSnapshot());
+      const candidate = new MemoryRepository([savedPlan("candidate-q3", 3)]);
+      candidate.session = { ...candidate.session, sessionKey: "session-b", projectId: "project-b", folderPath: folderB };
+      const message = failure === "candidate-list" ? "Не удалось прочитать кварталы" : "Не удалось закрыть текущий проект";
+      if (failure === "candidate-list") candidate.list.mockRejectedValueOnce(new Error(message));
+      else repository.close.mockRejectedValueOnce(new Error(message));
+      dependencies.openProject.mockResolvedValueOnce(candidate);
+
+      expect(await controller.actions.openProject(folderB)).toBe(false);
+      expect(candidate.close).toHaveBeenCalledOnce();
+      expect(candidate.close).toHaveBeenCalledWith({ discardFailedWrites: true });
+      expect(controller.getSnapshot()).toMatchObject({
+        project: previous.project, activePlanId: previous.activePlanId, plans: previous.plans,
+        draft: previous.draft, dirty: true, busy: false, error: message
+      });
+      if (failure === "candidate-list") expect(repository.close).not.toHaveBeenCalled();
+      else expect(repository.close).toHaveBeenCalledOnce();
+
+      // Cleanup did not replace the current repository: a subsequent write still saves A.
+      expect(await controller.actions.save()).toBe(true);
+      expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("0.5");
+      expect(candidate.save).not.toHaveBeenCalled();
+    }
+  );
+
+  it("guards an external name form and renames metadata without moving the folder or changing plans", async () => {
+    const confirm = vi.fn(async () => false);
+    const { controller, repository } = workspace(new MemoryRepository(), confirm);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    const plans = clone([...repository.rows.values()]);
+    controller.actions.setPendingFormDirty("project-name", true);
+    expect(await controller.actions.selectPlan("q2")).toBe(false);
+    expect(await controller.actions.closeProject()).toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(repository.close).not.toHaveBeenCalled();
+    expect(await controller.actions.renameProject("Название из данных")).toBe(true);
+    controller.actions.setPendingFormDirty("project-name", false);
+    expect(repository.rename).toHaveBeenCalledWith("Название из данных");
+    expect(controller.getSnapshot().project).toMatchObject({
+      projectId: "project-a", name: "Название из данных", folderPath: folderA
+    });
+    expect([...repository.rows.values()]).toEqual(plans);
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+});
