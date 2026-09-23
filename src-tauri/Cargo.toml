@@ -1,0 +1,26 @@
+[package]
+name = "capacity-planner"
+version = "0.1.0"
+description = "Local-first capacity planning desktop app"
+authors = ["Capacity Planner"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.1.1", features = [] }
+
+[dependencies]
+tauri = { version = "2.2.5", features = [] }
+tauri-plugin-sql = { version = "2.2.0", features = ["sqlite"] }
+tauri-plugin-dialog = "2.2.0"
+tauri-plugin-fs = "2.2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
+tokio = { version = "1.52.3", features = ["sync", "rt-multi-thread", "time"] }
+uuid = { version = "1.23.4", features = ["v4"] }
+
+[dev-dependencies]
+tauri = { version = "2.2.5", features = ["test"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

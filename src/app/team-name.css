@@ -1,0 +1,68 @@
+.team-header-name {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: 20px;
+  max-width: 60%;
+  overflow-wrap: anywhere;
+}
+
+.team-name-form {
+  background: #fff;
+  border: 1px solid #e4e9f2;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 16px;
+}
+
+.team-name-form label {
+  color: #526071;
+  display: grid;
+  gap: 6px;
+}
+
+.team-name-form input {
+  min-width: 0;
+  width: 100%;
+}
+
+.team-name-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.team-name-form button,
+.team-header-name button {
+  background: #1d5fd1;
+  border: 0;
+  color: #fff;
+  cursor: pointer;
+  min-height: 36px;
+  padding: 7px 12px;
+}
+
+.team-name-form button.secondary {
+  background: #eef3fb;
+  color: #24476f;
+}
+
+.team-name-form button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.team-name-form .inline-error {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .team-header-name {
+    align-items: flex-start;
+    margin-left: 0;
+    max-width: 100%;
+  }
+}

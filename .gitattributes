@@ -1,0 +1,2 @@
+# SQLite migration checksums depend on exact source bytes.
+*.sql text eol=lf
