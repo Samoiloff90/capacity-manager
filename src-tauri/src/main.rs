@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use capacity_planner::project_store::commands;
 
 fn main() {

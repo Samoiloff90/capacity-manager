@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const port = Number(process.argv[2] ?? 19323);
+const emulateOffline = process.env.CAPACITY_SMOKE_OFFLINE === "1";
 assert(Number.isInteger(port) && port >= 1024 && port < 65536);
 const root = resolve("src-tauri/target", `workflow-smoke-${Date.now()}`);
 const folderA = resolve(root, "Команда А");
@@ -163,6 +164,13 @@ try {
     if (await evaluate("Boolean(document.querySelector('[role=alertdialog]'))")) await click("Не сохранять");
   }
   await waitFor("document.querySelector('.project-welcome') !== null");
+  if (emulateOffline) {
+    await cdp("Network.enable");
+    await cdp("Network.emulateNetworkConditions", {
+      offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0
+    });
+    assert.equal(await evaluate("navigator.onLine"), false);
+  }
   await evaluate(`(() => {
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (resource, options) => {
@@ -367,6 +375,7 @@ try {
   assert.equal(afterNavigation.length, 1);
   assert.equal(afterNavigation[0].url, "http://tauri.localhost/");
   await writeFile(resolve(root, "result.json"), JSON.stringify({ passed: true, folderA, folderB, revision: persisted[0].revision,
+    networkMode: emulateOffline ? "CDP renderer offline emulation; not an OS network block" : "normal",
     capacityHours: "252", productBudgetHours: "50.4", calendarVersion: snapshot.calendarSource.version,
     taskCount: snapshot.tasks.length, productDemandHours: "30", productRemainingHours: "20.4", reserveDemandHours: "25",
     missingEstimateRoundTrip: true, explicitZeroRoundTrip: true, tinyDeficitDisplayed: true }, null, 2));
