@@ -389,4 +389,102 @@ describe("project workspace lifecycle and unsaved changes", () => {
     expect([...repository.rows.values()]).toEqual(plans);
     expect(repository.save).not.toHaveBeenCalled();
   });
+
+  it("saves and reopens positive, zero and missing task estimates without changing another quarter", async () => {
+    const { controller, repository, dependencies } = workspace();
+    const untouched = clone(repository.rows.get("q1"));
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q2");
+    const tasks = [
+      { id: "planned", name: "Работа продукта", directionId: "product", estimateHours: "120.125" },
+      { id: "zero", name: "Явный ноль", directionId: "product", estimateHours: "0" },
+      { id: "unknown", name: "Оценка ожидается", directionId: "bugs", estimateHours: null }
+    ];
+    controller.actions.updateDraft((draft) => ({
+      ...draft,
+      directions: [
+        { id: "product", name: "Продукт", percent: "20" },
+        { id: "bugs", name: "Баги", percent: "30" },
+        { id: "meetings", name: "Встречи", percent: "50" }
+      ], tasks
+    }));
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.rows.get("q1")).toEqual(untouched);
+    expect(await controller.actions.closeProject()).toBe(true);
+
+    const reopened = new ProjectWorkspaceController(dependencies);
+    expect(await reopened.actions.openProject(folderA)).toBe(true);
+    expect(reopened.getSnapshot().activePlanId).toBe("q2");
+    expect(reopened.getSnapshot().draft?.tasks).toEqual(tasks);
+    expect(reopened.getSnapshot().dirty).toBe(false);
+    const calculation = reopened.getSnapshot().calculation;
+    expect(calculation?.ok).toBe(true);
+    if (!calculation?.ok) throw new Error("Expected calculation after reopen");
+    expect(calculation.result.totals).toMatchObject({ knownDemandHours: "120.125", missingEstimateCount: 1, demandComplete: false });
+    expect(calculation.result.directions.find((direction) => direction.directionId === "product"))
+      .toMatchObject({ budgetHours: "99.2", overrunKnownHours: "20.925", balanceComplete: true });
+    expect(calculation.result.directions.find((direction) => direction.directionId === "bugs"))
+      .toMatchObject({ knownDemandHours: "0", missingEstimateCount: 1, confirmedRemainingHours: null });
+  });
+
+  it("moves then deletes a task, updating each direction and preserving the other quarter", async () => {
+    const { controller, repository, dependencies } = workspace();
+    const untouched = clone(repository.rows.get("q1"));
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q2");
+    controller.actions.updateDraft((draft) => ({
+      ...draft,
+      directions: [{ id: "product", name: "Продукт", percent: "50" }, { id: "bugs", name: "Баги", percent: "50" }],
+      tasks: [{ id: "task", name: "Переносимая работа", directionId: "product", estimateHours: "60" }]
+    }));
+    expect(await controller.actions.save()).toBe(true);
+    controller.actions.updateDraft((draft) => ({ ...draft, tasks: draft.tasks.map((task) => ({ ...task, directionId: "bugs" })) }));
+    const moved = controller.getSnapshot().calculation;
+    if (!moved?.ok) throw new Error("Expected calculation after task move");
+    expect(moved.result.directions.find((direction) => direction.directionId === "product"))
+      .toMatchObject({ knownDemandHours: "0", remainingKnownHours: "248" });
+    expect(moved.result.directions.find((direction) => direction.directionId === "bugs"))
+      .toMatchObject({ knownDemandHours: "60", remainingKnownHours: "188" });
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.rows.get("q2")?.snapshot.tasks).toEqual([
+      { id: "task", name: "Переносимая работа", directionId: "bugs", estimateHours: "60" }
+    ]);
+    controller.actions.updateDraft((draft) => ({ ...draft, tasks: draft.tasks.filter((task) => task.id !== "task") }));
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.rows.get("q1")).toEqual(untouched);
+    await controller.actions.closeProject();
+    const reopened = new ProjectWorkspaceController(dependencies);
+    await reopened.actions.openProject(folderA);
+    expect(reopened.getSnapshot().draft?.tasks).toEqual([]);
+    const empty = reopened.getSnapshot().calculation;
+    if (!empty?.ok) throw new Error("Expected calculation after deletion");
+    expect(empty.result.directions.map((direction) => direction.remainingKnownHours)).toEqual(["248", "248"]);
+  });
+
+  it.each([
+    ["negative estimate", "-1", "product"], ["raw text estimate", "несколько", "product"],
+    ["unknown direction", "4", "missing"]
+  ])("preserves an invalid task draft after %s and allows a corrected positive estimate", async (_case, estimateHours, directionId) => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q2");
+    const persisted = clone(repository.rows.get("q2"));
+    controller.actions.updateDraft((draft) => ({
+      ...draft, directions: [{ id: "product", name: "Продукт", percent: "100" }],
+      tasks: [{ id: "task", name: "Работа", directionId, estimateHours }]
+    }));
+    const raw = clone(controller.getSnapshot().draft);
+    expect(await controller.actions.save()).toBe(false);
+    expect(repository.save).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().draft).toEqual(raw);
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(controller.getSnapshot().error).toBeTruthy();
+    expect(repository.rows.get("q2")).toEqual(persisted);
+    controller.actions.updateDraft((draft) => ({
+      ...draft, tasks: draft.tasks.map((task) => ({ ...task, directionId: "product", estimateHours: "10.25" }))
+    }));
+    expect(await controller.actions.save()).toBe(true);
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(repository.rows.get("q2")?.snapshot.tasks[0].estimateHours).toBe("10.25");
+  });
 });

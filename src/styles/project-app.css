@@ -94,6 +94,21 @@
 .project-table tr:last-child td { border-bottom: 0; }
 .project-table-empty { color: #667085; padding: 22px !important; text-align: center !important; }
 .project-table-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.project-demand-summary { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 13px; margin: -5px 0 20px; }
+.project-task-help { margin-bottom: 14px; }
+.project-estimate-missing { color: #805815; font-size: 12px; margin-top: 5px; }
+.project-demand-summary .project-estimate-missing { margin-top: 0; }
+.project-balance-summary { margin-top: 28px; }
+.project-balance-label { color: #667085; display: block; font-size: 12px; margin-bottom: 5px; }
+.project-balance-value { display: block; white-space: nowrap; }
+.project-direction-summary .project-direction-status { max-width: 320px; min-width: 190px; }
+.project-balance-status { background: #edf2f8; border-radius: 5px; color: #526071; display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 7px; }
+.project-balance-status.surplus, .project-balance-status.balanced { background: #eaf5ed; color: #25633c; }
+.project-balance-status.deficit { background: #fff0f0; color: #9b1c1c; }
+.project-balance-status.preliminary { background: #fff8e7; color: #805815; }
+.project-deficit, .project-deficit .project-balance-label { color: #9b1c1c; }
+.project-app .project-balance-note { color: #667085; font-size: 12px; line-height: 1.4; margin: 7px 0 0; }
+.project-balance-limitation { margin-top: 12px; }
 .project-two-columns { display: grid; gap: 20px; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); }
 .project-competencies { margin-top: 22px; }
 .project-competencies h3 { font-size: 16px; margin: 0 0 10px; }

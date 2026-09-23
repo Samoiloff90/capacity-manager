@@ -1,20 +1,23 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectWorkspace } from "./project-workspace";
+import { TasksEditor } from "./TasksEditor";
 import { getQuarterDates, type Quarter } from "../domain/capacity/calendar-quarter";
-import { formatBalanceHours, formatHours, normalizeUserDecimal } from "../domain/capacity/input-format";
+import { formatHours, normalizeUserDecimal } from "../domain/capacity/input-format";
+import { describeDirectionBalance } from "../domain/capacity/direction-balance";
 import { BUNDLED_CALENDAR_YEARS, getCalendarOverrides } from "../domain/capacity/project-calendar";
 import type { QuarterCapacityResult, QuarterSnapshot, QuarterValidationIssue } from "../domain/capacity/quarter-capacity.types";
 import "../styles/project-app.css";
 
-type Tab = "team" | "calendar" | "absences" | "allocation";
+type Tab = "team" | "calendar" | "absences" | "allocation" | "tasks";
 type UpdateDraft = (update: (current: QuarterSnapshot) => QuarterSnapshot) => void;
 type EditorProps = { snapshot: QuarterSnapshot; update: UpdateDraft; result: QuarterCapacityResult | null };
 const tabs: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "team", label: "Команда" },
   { id: "calendar", label: "Календарь" },
   { id: "absences", label: "Отсутствия" },
-  { id: "allocation", label: "Распределение" }
+  { id: "allocation", label: "Распределение" },
+  { id: "tasks", label: "Задачи" }
 ];
 const nameGuard = "project-name";
 const newId = () => crypto.randomUUID();
@@ -34,7 +37,8 @@ function fieldLabel(path: string): string {
   };
   const fields: Record<string, string> = {
     name: "название или имя", fte: "ставка", percent: "доля", competencyId: "компетенция",
-    memberId: "сотрудник", startDate: "дата начала", endDate: "дата окончания", date: "дата"
+    memberId: "сотрудник", startDate: "дата начала", endDate: "дата окончания", date: "дата",
+    directionId: "направление", estimateHours: "оценка в часах"
   };
   const label = section[collection] ?? "Данные квартала";
   return `${label}${row !== undefined && /^\d+$/.test(row) ? ` ${Number(row) + 1}` : ""}${fields[field] ? `, ${fields[field]}` : ""}`;
@@ -213,6 +217,11 @@ export default function ProjectApp() {
             <div className="project-summary-card"><span>Рабочих дней в календаре</span><strong>{result?.totals.workingDays ?? "—"}</strong><span>Общие для команды; отсутствия указаны отдельно</span></div>
             <div className="project-summary-card"><span>Сотрудников в квартале</span><strong>{state.draft.members.length}</strong><span>Состав этого квартала сохраняется отдельно</span></div>
           </div>
+          {result && <div className="project-demand-summary" role="status">
+            <span>{result.totals.demandComplete ? "Потребность по задачам" : "Известная потребность по задачам"}: <strong>{formatHours(result.totals.knownDemandHours)}</strong></span>
+            <span>Задач без оценки: <strong>{result.totals.missingEstimateCount}</strong></span>
+            {!result.totals.demandComplete && <span className="project-estimate-missing">Потребность неполная; остатки затронутых направлений предварительные.</span>}
+          </div>}
           {state.calculation && !state.calculation.ok && <ValidationMessages issues={state.calculation.errors} />}
           {result && result.allocation.status !== "complete" && <div className="project-message warning" role="status">
             Сумма долей — {numberText(result.allocation.totalPercent)}%, требуется 100%. Распределение можно сохранить как черновик; бюджеты направлений пока предварительные.
@@ -226,6 +235,10 @@ export default function ProjectApp() {
               {tab === "calendar" && <CalendarEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
               {tab === "absences" && <AbsenceEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
               {tab === "allocation" && <AllocationEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
+              {tab === "tasks" && <>
+                <TasksEditor snapshot={state.draft} update={actions.updateDraft} onGoToAllocation={() => setTab("allocation")} />
+                <BalanceSummary snapshot={state.draft} result={result} />
+              </>}
             </section>
           </fieldset>
         </>}
@@ -381,8 +394,7 @@ function AllocationEditor({ snapshot, update, result }: EditorProps) {
     <div className="project-section-heading"><div><h2>Распределение часов</h2><p>Доли применяются ко всем доступным часам команды. Встречи можно добавить отдельным направлением.</p></div>
       <button type="button" onClick={() => update((current) => ({ ...current, directions: [...current.directions, { id: newId(), name: "", percent: "0" }] }))}>Добавить направление</button>
     </div>
-    <div className="data-table-wrap"><table className="project-table"><thead><tr><th>Направление</th><th>Доля, %</th><th className="project-number">Бюджет часов</th>
-      {hasTasks && <><th className="project-number">Известные оценки задач</th><th className="project-number">Остаток по известным оценкам</th></>}<th>Действия</th>
+    <div className="data-table-wrap"><table className="project-table"><thead><tr><th>Направление</th><th>Доля, %</th><th className="project-number">Бюджет часов</th><th>Действия</th>
     </tr></thead><tbody>
       {snapshot.directions.map((direction, index) => {
         const capacity = result?.directions.find((row) => row.directionId === direction.id);
@@ -395,19 +407,56 @@ function AllocationEditor({ snapshot, update, result }: EditorProps) {
               const value = finishDecimal(event.target.value);
               if (value !== direction.percent) setDirection(direction.id, { percent: value });
             }} /></td>
-          <td className="project-number">{capacity ? formatHours(capacity.budgetHours) : "—"}</td>
-          {hasTasks && <><td className="project-number">{capacity ? formatHours(capacity.knownDemandHours) : "—"}</td>
-            <td className="project-number">{capacity ? formatBalanceHours(capacity.remainingKnownHours) : "—"}{capacity && !capacity.balanceComplete && <div className="project-muted">Неполные данные</div>}</td></>}
-          <td className="project-row-action"><button type="button" className="danger" disabled={used} title={used ? "К направлению привязаны задачи; они сохраняются в плане" : "Удалить направление"}
-            onClick={() => update((current) => ({ ...current, directions: current.directions.filter((item) => item.id !== direction.id) }))}>Удалить</button></td>
+          <td className="project-number">{capacity ? formatHours(capacity.budgetHours) : "—"}
+            {capacity && !capacity.budgetComplete && <div className="project-muted">Предварительный</div>}</td>
+          <td className="project-row-action"><button type="button" className="danger" disabled={used}
+            aria-label={`Удалить направление ${direction.name.trim() || index + 1}`}
+            title={used ? "Перенесите/удалите задачи во вкладке «Задачи»" : "Удалить направление"}
+            onClick={() => update((current) => current.tasks.some((task) => task.directionId === direction.id) ? current
+              : { ...current, directions: current.directions.filter((item) => item.id !== direction.id) })}>Удалить</button></td>
         </tr>;
       })}
-      {!snapshot.directions.length && <tr><td colSpan={hasTasks ? 6 : 4} className="project-table-empty">Добавьте направления и распределите между ними 100% доступных часов.</td></tr>}
+      {!snapshot.directions.length && <tr><td colSpan={4} className="project-table-empty">Добавьте направления и распределите между ними 100% доступных часов.</td></tr>}
     </tbody></table></div>
     {result && <p className="project-table-footer">Сумма долей: <strong>{numberText(result.allocation.totalPercent)}%</strong>
       {result.allocation.status === "complete" ? "Распределение заполнено." : "Для полного распределения требуется 100%."}</p>}
-    {hasTasks && <p className="project-muted">Оценки задач взяты из сохранённого плана. Пустые оценки не считаются нулевой потребностью.</p>}
+    {hasTasks && <p className="project-muted">Направление с задачами удалить нельзя. Перенесите/удалите задачи во вкладке «Задачи».</p>}
+    <BalanceSummary snapshot={snapshot} result={result} />
   </>;
+}
+
+function BalanceSummary({ snapshot, result }: Pick<EditorProps, "snapshot" | "result">) {
+  const statusLabels = { surplus: "Остаток", balanced: "Баланс", deficit: "Дефицит", preliminary: "Предварительно" };
+  return <section className="project-balance-summary" aria-labelledby="direction-summary-title">
+    <div className="project-section-heading"><div><h2 id="direction-summary-title">Баланс направлений</h2>
+      <p>Бюджет, потребность по задачам и остаток часов за выбранный квартал. Направления без задач сохраняют свой резерв.</p></div></div>
+    <div className="data-table-wrap"><table className="project-table project-direction-summary" aria-label="Баланс направлений">
+      <thead><tr><th>Направление</th><th className="project-number">Бюджет часов</th><th className="project-number">Потребность</th><th className="project-number">Баланс часов</th><th>Статус</th></tr></thead>
+      <tbody>{snapshot.directions.map((direction) => {
+        const capacity = result?.directions.find((row) => row.directionId === direction.id);
+        const balance = capacity ? describeDirectionBalance(capacity) : null;
+        return <tr key={direction.id} data-direction-id={direction.id} data-status={balance?.status ?? "unavailable"}>
+          <td>{direction.name || "Направление без названия"}</td>
+          <td className="project-number project-direction-budget">{capacity ? formatHours(capacity.budgetHours) : "—"}
+            {capacity && !capacity.budgetComplete && <div className="project-muted">Предварительный</div>}</td>
+          <td className="project-number project-direction-demand" aria-label={`Потребность направления ${direction.name}`}>
+            <span className="project-balance-label">{balance?.demandLabel ?? "Потребность"}</span>
+            <strong className="project-balance-value">{balance?.demandText ?? "—"}</strong>
+          </td>
+          <td className={`project-number project-direction-balance${balance?.deficit ? " project-deficit" : ""}`} aria-label={`Баланс направления ${direction.name}`}>
+            <span className="project-balance-label">{balance?.balanceLabel ?? "Баланс"}</span>
+            <strong className="project-balance-value">{balance?.balanceText ?? "—"}</strong>
+          </td>
+          <td className="project-direction-status"><span className={`project-balance-status ${balance?.status ?? "unavailable"}`}>{balance ? statusLabels[balance.status] : "Нет расчёта"}</span>
+            {(balance?.note || !balance) && <p className="project-balance-note">{balance?.note || "Исправьте незаполненные или некорректные данные плана."}</p>}
+          </td>
+        </tr>;
+      })}
+      {!snapshot.directions.length && <tr><td colSpan={5} className="project-table-empty">Свод появится после добавления направлений.</td></tr>}
+      </tbody>
+    </table></div>
+    <p className="project-muted project-balance-limitation">Остаток общих часов не подтверждает достаточность каждой компетенции: оценки задач не разбиты по специальностям.</p>
+  </section>;
 }
 
 function DiscardDialog({ message, onAnswer }: { message: string; onAnswer: (discard: boolean) => void }) {
