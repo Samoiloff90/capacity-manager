@@ -45,6 +45,37 @@ fn navigation_is_local_and_development_origin_is_explicit() {
     }
 }
 
+/// Outside Windows `generate_context!` decodes the first PNG of `bundle.icon` and only
+/// accepts 8-bit RGBA. Windows builds use the .ico, so a bad PNG would otherwise surface
+/// only in the macOS build.
+#[test]
+fn bundle_png_icons_are_8_bit_rgba() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (config_dir, config) in [
+        (manifest.to_path_buf(), include_str!("../tauri.conf.json")),
+        (
+            manifest.join("tests/fixtures/storage"),
+            include_str!("fixtures/storage/tauri.conf.json"),
+        ),
+    ] {
+        let config: Value = serde_json::from_str(config).unwrap();
+        let icons: Vec<_> = config["bundle"]["icon"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|icon| icon.as_str().unwrap())
+            .collect();
+        assert!(icons.iter().any(|icon| icon.ends_with(".png")), "{icons:?}");
+        assert!(icons.iter().any(|icon| icon.ends_with(".ico")), "{icons:?}");
+        for icon in icons.iter().filter(|icon| icon.ends_with(".png")) {
+            let bytes = std::fs::read(config_dir.join(icon)).unwrap();
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{icon}");
+            assert_eq!(&bytes[12..16], b"IHDR", "{icon}");
+            assert_eq!((bytes[24], bytes[25]), (8, 6), "{icon}: bit depth, RGBA");
+        }
+    }
+}
+
 fn directives(value: &str) -> BTreeMap<&str, Vec<&str>> {
     let mut directives = BTreeMap::new();
     for directive in value

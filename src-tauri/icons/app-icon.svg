@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Capacity Planner: restrained boar. Source for icon.ico and the PNG icons;
+       icon.icns is generated from app-icon-macos.svg (see README). -->
+  <rect x="32" y="32" width="960" height="960" rx="210" fill="#24476f"/>
+  <g id="boar">
+    <path d="M296 440 L250 214 Q254 188 280 196 L456 336 Z" fill="#eef3fb"/>
+    <path d="M728 440 L774 214 Q770 188 744 196 L568 336 Z" fill="#eef3fb"/>
+    <path d="M318 404 L286 252 L414 352 Z" fill="#9fb6d6"/>
+    <path d="M706 404 L738 252 L610 352 Z" fill="#9fb6d6"/>
+    <path d="M512 292 C690 292 770 400 770 520 C770 640 700 760 512 790 C324 760 254 640 254 520 C254 400 334 292 512 292 Z" fill="#eef3fb"/>
+    <path d="M440 318 L466 262 L490 312 L512 250 L534 312 L558 262 L584 318 Z" fill="#eef3fb"/>
+    <circle cx="420" cy="486" r="27" fill="#24476f"/>
+    <circle cx="604" cy="486" r="27" fill="#24476f"/>
+    <ellipse cx="512" cy="664" rx="140" ry="98" fill="#b9cbe3"/>
+    <ellipse cx="464" cy="664" rx="23" ry="35" fill="#24476f"/>
+    <ellipse cx="560" cy="664" rx="23" ry="35" fill="#24476f"/>
+    <path d="M388 712 Q330 660 350 566 Q366 640 420 682 Z" fill="#ffffff" stroke="#24476f" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M636 712 Q694 660 674 566 Q658 640 604 682 Z" fill="#ffffff" stroke="#24476f" stroke-width="12" stroke-linejoin="round"/>
+  </g>
+</svg>
