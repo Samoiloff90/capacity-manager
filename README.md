@@ -28,9 +28,9 @@ WebView2. Прошлая проверка обнаружила фоновые в
 не должно передавать данные команды. Эта проверка на Windows и macOS **ещё не
 выполнена**; до её результатов рабочие данные в приложение не загружайте.
 Подробности — [проверка ZIP и сети](docs/audit/WINDOWS_PORTABLE.md).
-Целевые ОС — Windows 10/11 x64 и macOS arm64 (DEC-023). Сборка .app для Mac настроена
-в GitHub Actions (первый запуск — после публикации этапа 3); на Mac приложение ещё не
-проверялось — чек-лист в
+Целевые ОС — Windows 10/11 x64 и macOS arm64 (DEC-023). .app для Mac собирается в
+GitHub Actions и запускается там на Mac-раннере (см. «Запустить на Mac»). На Mac
+пользователя приложение ещё не проверялось — чек-лист в
 [MACOS_BUILD.md](docs/audit/MACOS_BUILD.md).
 
 Старый код и его тесты сохранены, но основной запуск больше не открывает прежнюю
@@ -213,9 +213,10 @@ Workflow из распакованного приложения прошёл т�
 Windows «Сохранить как» (`scripts/report-export-smoke.mjs`). macOS и открытие файла
 в Excel не проверялись — [REPORT_EXPORT.md](docs/audit/REPORT_EXPORT.md).
 
-Этап 3, macOS: **344 теста Vitest и 42 Rust-теста на Windows — PASS**. Код меню и защиты
-выхода для macOS компилируется только в CI; workflow ещё не запускался, результаты будут
-записаны в [MACOS_BUILD.md](docs/audit/MACOS_BUILD.md).
+Этап 3, macOS: **344 теста Vitest и 42 Rust-теста на Windows — PASS**. В GitHub Actions
+оба job зелёные: .app собран, подписан ad-hoc, запущен на Mac-раннере и завершён через
+хук выхода; Vitest, TypeScript и `cargo test` проходят и на macOS. Подробности —
+[MACOS_BUILD.md](docs/audit/MACOS_BUILD.md).
 
 Флаг Cargo `--offline` требует заранее загруженных зависимостей.
 Windows EXE: debug-сборка — `src-tauri/target/debug/capacity-planner.exe`,
