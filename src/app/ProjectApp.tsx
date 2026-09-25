@@ -1,6 +1,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectWorkspace } from "./project-workspace";
+import { PROJECT_NAME_FORM } from "./project-workspace-controller";
 import { TasksEditor } from "./TasksEditor";
 import { getQuarterDates, type Quarter } from "../domain/capacity/calendar-quarter";
 import { formatHours, normalizeUserDecimal } from "../domain/capacity/input-format";
@@ -19,7 +20,7 @@ const tabs: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "allocation", label: "Распределение" },
   { id: "tasks", label: "Задачи" }
 ];
-const nameGuard = "project-name";
+const nameGuard = PROJECT_NAME_FORM;
 const newId = () => crypto.randomUUID();
 const numberText = (value: string) => value.replace(".", ",");
 
@@ -211,7 +212,13 @@ export default function ProjectApp() {
 
         {!state.draft ? <div className="empty-state">Создайте квартал или выберите сохранённый план, чтобы добавить сотрудников и настроить рабочие дни.</div> : <>
           <div className="project-section-heading"><div><h2>{state.draft.quarter} квартал {state.draft.year} года</h2>
-            <p>Общий календарь команды, 8 часов в рабочем дне. Ставка уменьшает часы пропорционально.</p></div></div>
+            <p>Общий календарь команды, 8 часов в рабочем дне. Ставка уменьшает часы пропорционально.</p></div>
+            <div className="project-actions">
+              {!state.report.available && state.report.hint && <span className="project-muted" role="status">{state.report.hint}</span>}
+              <button className="secondary" type="button" disabled={disabled || !state.report.available}
+                title={state.report.hint || "Сохранить отчёт по сохранённому кварталу в файл Excel"}
+                onClick={() => { void actions.exportReport(); }}>Выгрузить отчёт</button>
+            </div></div>
           <div className="project-summary">
             <div className="project-summary-card"><span>Доступно команде за квартал</span><strong>{result ? formatHours(result.totals.availableHours) : "—"}</strong><span>После отсутствий и с учётом ставок</span></div>
             <div className="project-summary-card"><span>Рабочих дней в календаре</span><strong>{result?.totals.workingDays ?? "—"}</strong><span>Общие для команды; отсутствия указаны отдельно</span></div>
@@ -312,7 +319,11 @@ function TeamEditor({ snapshot, update, result }: EditorProps) {
         }))}>Добавить компетенцию</button></div>
       </section>
       <section><h3>Часы по компетенциям</h3><div className="data-table-wrap"><table className="project-table"><thead><tr><th>Компетенция</th><th className="project-number">Сотрудников</th><th className="project-number">Часов</th></tr></thead>
-        <tbody>{result?.competencies.map((competency) => <tr key={competency.competencyId}><td>{competency.name}</td><td className="project-number">{competency.memberCount}</td><td className="project-number">{formatHours(competency.availableHours)}</td></tr>)}
+        <tbody>{result && snapshot.competencies.map((competency) => {
+          // Snapshot order, as in the other tables and the exported report.
+          const capacity = result.competencies.find((row) => row.competencyId === competency.id);
+          return capacity && <tr key={competency.id}><td>{capacity.name}</td><td className="project-number">{capacity.memberCount}</td><td className="project-number">{formatHours(capacity.availableHours)}</td></tr>;
+        })}
           {!result && <tr><td colSpan={3} className="project-table-empty">Заполните данные для расчёта.</td></tr>}
         </tbody></table></div></section>
     </div>

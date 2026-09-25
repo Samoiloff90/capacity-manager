@@ -4,6 +4,12 @@ import { createQuarterCalendar, type CalendarMode } from "../domain/capacity/pro
 import { calculateQuarterCapacity } from "../domain/capacity/quarter-capacity.calculator";
 import type { CalculateQuarterCapacityResult, QuarterSnapshot } from "../domain/capacity/quarter-capacity.types";
 import { validateQuarterSnapshot } from "../domain/capacity/quarter-snapshot.validation";
+import { buildQuarterReport, type QuarterReport } from "../export/quarter-report";
+import { saveReportFile, type ReportSaveOutcome } from "../export/report-file";
+import { renderQuarterReportXlsx } from "../export/xlsx";
+
+/** Pending-form key of the team rename form; it blocks saving and the report. */
+export const PROJECT_NAME_FORM = "project-name";
 
 export interface WorkspaceRepository {
   readonly session: Readonly<ProjectSession>;
@@ -26,12 +32,17 @@ export interface WorkspaceState {
   notice: string;
   calculation: CalculateQuarterCapacityResult | null;
   confirmation: { message: string } | null;
+  /** Whether the saved quarter can be exported; hint explains why not. */
+  report: { available: boolean; hint: string };
 }
 
 interface Dependencies {
   createProject: (folderPath: string, name: string) => Promise<WorkspaceRepository>;
   openProject: (folderPath: string) => Promise<WorkspaceRepository>;
   id: () => string;
+  now: () => Date;
+  renderReport: (report: QuarterReport) => Promise<Uint8Array>;
+  saveReportFile: (defaultName: string, bytes: Uint8Array) => Promise<ReportSaveOutcome>;
   confirmDiscard?: (message: string) => Promise<boolean>;
   readSelectedPlan?: (projectId: string) => string | null;
   writeSelectedPlan?: (projectId: string, planId: string) => void;
@@ -39,7 +50,8 @@ interface Dependencies {
 
 function emptyState(): WorkspaceState {
   return { project: null, plans: [], activePlanId: null, draft: null, dirty: false,
-    busy: false, closeProtectionReady: true, error: "", notice: "", calculation: null, confirmation: null };
+    busy: false, closeProtectionReady: true, error: "", notice: "", calculation: null, confirmation: null,
+    report: { available: false, hint: "" } };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function errorMessage(error: unknown): string {
@@ -54,11 +66,16 @@ export class ProjectWorkspaceController {
   private readonly deps: Dependencies;
   private repository: WorkspaceRepository | null = null;
   private operation: Promise<boolean> | null = null;
-  private operationKind: "save" | "transition" | null = null;
+  private operationKind: "save" | "transition" | "export" | null = null;
   private resolveDiscard: ((discard: boolean) => void) | null = null;
+  // Keyed by the stored plan object: list/save always replace it with a new one.
+  private savedCalculation: { plan: StoredQuarterPlan; result: CalculateQuarterCapacityResult } | null = null;
 
   constructor(deps: Partial<Dependencies> = {}) {
-    this.deps = { createProject, openProject, id: () => crypto.randomUUID(), ...deps };
+    this.deps = {
+      createProject, openProject, id: () => crypto.randomUUID(), now: () => new Date(),
+      renderReport: renderQuarterReportXlsx, saveReportFile, ...deps
+    };
   }
   getSnapshot = (): WorkspaceState => this.state;
   subscribe = (listener: () => void): (() => void) => {
@@ -71,10 +88,29 @@ export class ProjectWorkspaceController {
     const saved = this.state.plans.find((plan) => plan.planId === this.state.activePlanId);
     this.state.dirty = this.pendingForms.size > 0 || (this.state.draft !== null
       && JSON.stringify(this.state.draft) !== JSON.stringify(saved?.snapshot));
+    this.state.report = this.reportAvailability().report;
     for (const listener of this.listeners) listener();
   }
 
-  private run(kind: "save" | "transition", task: () => Promise<boolean>): Promise<boolean> {
+  /** Only the saved quarter is exported, calculated from its snapshot rather than the draft. */
+  private reportAvailability(): { report: WorkspaceState["report"]; saved?: StoredQuarterPlan;
+    result?: Extract<CalculateQuarterCapacityResult, { ok: true }>["result"] } {
+    const saved = this.state.plans.find((plan) => plan.planId === this.state.activePlanId);
+    if (!this.state.project || !saved) return { report: { available: false, hint: "" } };
+    if (this.pendingForms.has(PROJECT_NAME_FORM)) {
+      return { report: { available: false, hint: "Сохраните или отмените новое название команды" } };
+    }
+    if (this.state.dirty) return { report: { available: false, hint: "Сохраните квартал" } };
+    if (this.savedCalculation?.plan !== saved) {
+      this.savedCalculation = { plan: saved, result: calculateQuarterCapacity(saved.snapshot) };
+    }
+    const calculation = this.savedCalculation.result;
+    return calculation.ok
+      ? { report: { available: true, hint: "" }, saved, result: calculation.result }
+      : { report: { available: false, hint: "Отчёт появится после заполнения данных" } };
+  }
+
+  private run(kind: "save" | "transition" | "export", task: () => Promise<boolean>): Promise<boolean> {
     if (this.operation || !this.state.closeProtectionReady) return Promise.resolve(false);
     this.operationKind = kind;
     this.publish({ busy: true, error: "", notice: "" });
@@ -201,6 +237,27 @@ export class ProjectWorkspaceController {
       const stored = clone(await this.repository.save(saved.planId, saved.revision, captured));
       this.publish({ plans: this.state.plans.map((plan) => plan.planId === stored.planId ? stored : plan) });
       this.publish({ notice: this.state.dirty ? "Расчёт сохранён. Более поздние изменения ещё не сохранены." : "Расчёт сохранён в папке проекта." });
+      return true;
+    }),
+    /** Exports the saved quarter; the native command shows "Save as". Cancelling is not an error. */
+    exportReport: (): Promise<boolean> => this.run("export", async () => {
+      const { report: availability, saved, result } = this.reportAvailability();
+      const project = this.state.project;
+      if (!availability.available || !saved || !result || !project) {
+        throw new Error(availability.hint ? `${availability.hint}.` : "Сначала выберите сохранённый квартал.");
+      }
+      let report: QuarterReport;
+      let bytes: Uint8Array;
+      try {
+        report = buildQuarterReport({ teamName: project.name, snapshot: saved.snapshot, result, exportedAt: this.deps.now() });
+        bytes = await this.deps.renderReport(report);
+      } catch (error) {
+        console.error(error);
+        throw new Error("Не удалось сформировать отчёт.");
+      }
+      const outcome = await this.deps.saveReportFile(report.fileBaseName, bytes);
+      if (outcome.status === "cancelled") return false;
+      this.publish({ notice: `Отчёт сохранён: ${outcome.path}` });
       return true;
     }),
     renameProject: (name: string): Promise<boolean> => this.run("transition", async () => {

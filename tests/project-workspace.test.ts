@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProjectWorkspaceController, type WorkspaceRepository } from "../src/app/project-workspace-controller";
+import { PROJECT_NAME_FORM, ProjectWorkspaceController, type WorkspaceRepository } from "../src/app/project-workspace-controller";
+import type { QuarterReport } from "../src/export/quarter-report";
+import type { ReportSaveOutcome } from "../src/export/report-file";
 import { ProjectPersistenceError, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
 import type { Quarter } from "../src/domain/capacity/calendar-quarter";
 import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
@@ -80,7 +82,11 @@ function workspace(repository = new MemoryRepository(), confirmDiscard?: (messag
   const dependencies = {
     createProject, openProject, id: () => `generated-${++nextId}`, confirmDiscard,
     readSelectedPlan: (projectId: string) => preferences.get(projectId) ?? null,
-    writeSelectedPlan: (projectId: string, planId: string) => { preferences.set(projectId, planId); }
+    writeSelectedPlan: (projectId: string, planId: string) => { preferences.set(projectId, planId); },
+    now: () => new Date(2026, 9, 5, 9, 7),
+    renderReport: vi.fn(async (_report: QuarterReport): Promise<Uint8Array> => new Uint8Array([0x50, 0x4b, 0x03, 0x04])),
+    saveReportFile: vi.fn(async (defaultName: string, _bytes: Uint8Array): Promise<ReportSaveOutcome> =>
+      ({ status: "saved", path: `D:\\Отчёты\\${defaultName}.xlsx` }))
   };
   return { controller: new ProjectWorkspaceController(dependencies), dependencies, repository, preferences };
 }
@@ -486,5 +492,117 @@ describe("project workspace lifecycle and unsaved changes", () => {
     expect(await controller.actions.save()).toBe(true);
     expect(controller.getSnapshot().dirty).toBe(false);
     expect(repository.rows.get("q2")?.snapshot.tasks[0].estimateHours).toBe("10.25");
+  });
+});
+
+describe("exporting the saved quarter", () => {
+  function peopleRows(report: QuarterReport) {
+    return report.sheets.find((sheet) => sheet.name === "Люди")!.rows.map((row) => row.cells.map((cell) => cell.kind === "empty" ? null : cell.value));
+  }
+
+  it("exports the saved snapshot, not the draft, and only after saving", async () => {
+    const { controller, dependencies, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    expect(controller.getSnapshot().report).toEqual({ available: true, hint: "" });
+
+    expect(await controller.actions.exportReport()).toBe(true);
+    const [report] = dependencies.renderReport.mock.calls[0];
+    expect(report.fileBaseName).toBe("Capacity Команда А 2026 Q1");
+    expect(peopleRows(report)[0][2]).toBe("1");
+    expect(report.sheets[0].rows[2].cells[1]).toEqual({ kind: "text", value: "05.10.2026 09:07" });
+    expect(dependencies.saveReportFile).toHaveBeenCalledWith("Capacity Команда А 2026 Q1", new Uint8Array([0x50, 0x4b, 0x03, 0x04]));
+    expect(controller.getSnapshot().notice).toBe("Отчёт сохранён: D:\\Отчёты\\Capacity Команда А 2026 Q1.xlsx");
+
+    changeFte(controller, "0.5");
+    expect(controller.getSnapshot().report).toEqual({ available: false, hint: "Сохраните квартал" });
+    expect(await controller.actions.exportReport()).toBe(false);
+    expect(controller.getSnapshot().error).toBe("Сохраните квартал.");
+    expect(dependencies.saveReportFile).toHaveBeenCalledTimes(1);
+
+    expect(await controller.actions.save()).toBe(true);
+    expect(controller.getSnapshot().report.available).toBe(true);
+    expect(await controller.actions.exportReport()).toBe(true);
+    expect(peopleRows(dependencies.renderReport.mock.calls[1][0])[0][2]).toBe("0.5");
+    expect(repository.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks to finish a pending team rename before exporting", async () => {
+    const { controller, dependencies } = workspace();
+    await controller.actions.openProject(folderA);
+    controller.actions.setPendingFormDirty(PROJECT_NAME_FORM, true);
+    expect(controller.getSnapshot().report).toEqual({ available: false, hint: "Сохраните или отмените новое название команды" });
+    expect(await controller.actions.exportReport()).toBe(false);
+    expect(controller.getSnapshot().error).toBe("Сохраните или отмените новое название команды.");
+    expect(dependencies.renderReport).not.toHaveBeenCalled();
+    controller.actions.setPendingFormDirty(PROJECT_NAME_FORM, false);
+    expect(controller.getSnapshot().report.available).toBe(true);
+  });
+
+  it("treats a cancelled dialog as neither success nor error", async () => {
+    const { controller, dependencies } = workspace();
+    await controller.actions.openProject(folderA);
+    dependencies.saveReportFile.mockResolvedValueOnce({ status: "cancelled" });
+    expect(await controller.actions.exportReport()).toBe(false);
+    expect(controller.getSnapshot()).toMatchObject({ error: "", notice: "", busy: false });
+  });
+
+  it("shows native and rendering failures in Russian", async () => {
+    const { controller, dependencies } = workspace();
+    await controller.actions.openProject(folderA);
+    dependencies.saveReportFile.mockRejectedValueOnce("Не удалось сохранить отчёт: файл открыт в другой программе, например в Excel. Закройте его и повторите.");
+    expect(await controller.actions.exportReport()).toBe(false);
+    expect(controller.getSnapshot().error).toContain("файл открыт в другой программе");
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    dependencies.renderReport.mockRejectedValueOnce(new Error("Sheet name is too long"));
+    expect(await controller.actions.exportReport()).toBe(false);
+    expect(controller.getSnapshot().error).toBe("Не удалось сформировать отчёт.");
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("does not offer a report for a saved plan that cannot be calculated", async () => {
+    const incomplete = savedPlan("q1", 1);
+    const repository = new MemoryRepository([{ ...incomplete, snapshot: { ...incomplete.snapshot, calendar: incomplete.snapshot.calendar.slice(1) } }]);
+    const { controller, dependencies } = workspace(repository);
+    await controller.actions.openProject(folderA);
+    expect(controller.getSnapshot().report).toEqual({ available: false, hint: "Отчёт появится после заполнения данных" });
+    expect(await controller.actions.exportReport()).toBe(false);
+    expect(dependencies.renderReport).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a cached calculation for a copied project with the same plan id and revision", async () => {
+    const first = new MemoryRepository([savedPlan("q1", 1)]);
+    const copy = savedPlan("q1", 1);
+    const second = new MemoryRepository([{ ...copy, snapshot: { ...copy.snapshot, members: [{ ...copy.snapshot.members[0], fte: "0.25" }] } }]);
+    second.session = { ...second.session, sessionKey: "session-b", name: "Команда Б", folderPath: folderB };
+    const { controller, dependencies } = workspace(first);
+    dependencies.openProject.mockImplementation(async (folder: string) => folder === folderA ? first : second);
+    await controller.actions.openProject(folderA);
+    expect(await controller.actions.exportReport()).toBe(true);
+    await controller.actions.openProject(folderB);
+    expect(await controller.actions.exportReport()).toBe(true);
+    const [firstReport, secondReport] = dependencies.renderReport.mock.calls.map(([report]) => report);
+    expect(peopleRows(firstReport)[0][2]).toBe("1");
+    expect(peopleRows(secondReport)[0][2]).toBe("0.25");
+    expect(secondReport.fileBaseName).toBe("Capacity Команда Б 2026 Q1");
+  });
+
+  it("closing waits until the save dialog has finished", async () => {
+    const { controller, dependencies, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    const dialog = deferred<ReportSaveOutcome>();
+    dependencies.saveReportFile.mockImplementationOnce(() => dialog.promise);
+    const exporting = controller.actions.exportReport();
+    await vi.waitFor(() => expect(dependencies.saveReportFile).toHaveBeenCalled());
+    expect(controller.getSnapshot().busy).toBe(true);
+    const closing = controller.actions.closeProject();
+    await Promise.resolve();
+    expect(repository.close).not.toHaveBeenCalled();
+    dialog.resolve({ status: "saved", path: "D:\\Отчёты\\q1.xlsx" });
+    expect(await exporting).toBe(true);
+    expect(await closing).toBe(true);
+    expect(repository.close).toHaveBeenCalledTimes(1);
   });
 });
