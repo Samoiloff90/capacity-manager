@@ -76,6 +76,8 @@ export class ProjectWorkspaceController {
   private operation: Promise<boolean> | null = null;
   private operationKind: "save" | "transition" | "export" | null = null;
   private resolveDiscard: ((discard: boolean) => void) | null = null;
+  // Set while closeProject waits for a running operation: a folder picked meanwhile is not opened.
+  private closeRequested = false;
   // Keyed by the stored plan object: list/save always replace it with a new one.
   private savedCalculation: { plan: StoredQuarterPlan; result: CalculateQuarterCapacityResult } | null = null;
 
@@ -157,11 +159,13 @@ export class ProjectWorkspaceController {
 
   /** The folder dialog is part of the operation, so closing the window waits for it. */
   private async pickFolder(title: string): Promise<string | null> {
-    try { return await this.deps.pickFolder(title); }
+    let folder: string | null;
+    try { folder = await this.deps.pickFolder(title); }
     catch (error) {
       console.error(error);
       throw new Error("Не удалось выбрать папку. Попробуйте ещё раз.");
     }
+    return this.closeRequested ? null : folder;
   }
 
   private async replaceProject(open: () => Promise<WorkspaceRepository>): Promise<boolean> {
@@ -210,8 +214,11 @@ export class ProjectWorkspaceController {
       return folder !== null && this.replaceProject(() => this.deps.openProject(folder));
     }),
     closeProject: async (): Promise<boolean> => {
-      // Window-close can arrive during a save: wait, then guard the latest draft.
-      if (this.operation) await this.operation;
+      // Window-close can arrive during a save or a folder dialog: wait, then guard the latest draft.
+      if (this.operation) {
+        this.closeRequested = true;
+        try { await this.operation; } finally { this.closeRequested = false; }
+      }
       return this.run("transition", async () => {
         if (!await this.canDiscard()) return false;
         await this.repository?.close({ discardFailedWrites: true });

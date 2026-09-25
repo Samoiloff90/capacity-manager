@@ -653,10 +653,15 @@ describe("choosing the project folder", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(closed).toBe(false);
+    // The folder picked after the close request is not opened: the window is closing.
     dialog.resolve(folderA);
-    expect(await opening).toBe(true);
+    expect(await opening).toBe(false);
     expect(await closing).toBe(true);
-    expect(repository.close).toHaveBeenCalledTimes(1);
+    expect(dependencies.openProject).not.toHaveBeenCalled();
+    expect(repository.close).not.toHaveBeenCalled();
     expect(controller.getSnapshot().project).toBeNull();
+    // Later operations are not affected by the finished close request.
+    expect(await controller.actions.chooseAndOpenProject()).toBe(true);
+    expect(dependencies.openProject).toHaveBeenCalledWith(folderA);
   });
 });
