@@ -7,6 +7,7 @@ import { validateQuarterSnapshot } from "../domain/capacity/quarter-snapshot.val
 import { buildQuarterReport, type QuarterReport } from "../export/quarter-report";
 import { saveReportFile, type ReportSaveOutcome } from "../export/report-file";
 import { renderQuarterReportXlsx } from "../export/xlsx";
+import { pickProjectFolder } from "./folder-picker";
 
 /** Pending-form key of the team rename form; it blocks saving and the report. */
 export const PROJECT_NAME_FORM = "project-name";
@@ -39,6 +40,8 @@ export interface WorkspaceState {
 interface Dependencies {
   createProject: (folderPath: string, name: string) => Promise<WorkspaceRepository>;
   openProject: (folderPath: string) => Promise<WorkspaceRepository>;
+  /** System folder dialog; null when cancelled. */
+  pickFolder: (title: string) => Promise<string | null>;
   id: () => string;
   now: () => Date;
   renderReport: (report: QuarterReport) => Promise<Uint8Array>;
@@ -54,6 +57,11 @@ function emptyState(): WorkspaceState {
     report: { available: false, hint: "" } };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
+function projectName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 1000) throw new Error("Укажите название команды от 1 до 1000 символов.");
+  return trimmed;
+}
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "Не удалось выполнить операцию с проектом.";
 }
@@ -73,7 +81,7 @@ export class ProjectWorkspaceController {
 
   constructor(deps: Partial<Dependencies> = {}) {
     this.deps = {
-      createProject, openProject, id: () => crypto.randomUUID(), now: () => new Date(),
+      createProject, openProject, pickFolder: pickProjectFolder, id: () => crypto.randomUUID(), now: () => new Date(),
       renderReport: renderQuarterReportXlsx, saveReportFile, ...deps
     };
   }
@@ -147,6 +155,15 @@ export class ProjectWorkspaceController {
     }
   }
 
+  /** The folder dialog is part of the operation, so closing the window waits for it. */
+  private async pickFolder(title: string): Promise<string | null> {
+    try { return await this.deps.pickFolder(title); }
+    catch (error) {
+      console.error(error);
+      throw new Error("Не удалось выбрать папку. Попробуйте ещё раз.");
+    }
+  }
+
   private async replaceProject(open: () => Promise<WorkspaceRepository>): Promise<boolean> {
     if (!await this.canDiscard()) return false;
     let candidate: WorkspaceRepository | null = null;
@@ -177,11 +194,21 @@ export class ProjectWorkspaceController {
 
   readonly actions = {
     createProject: (folderPath: string, name: string): Promise<boolean> => this.run("transition", async () => {
-      if (!name.trim() || name.trim().length > 1000) throw new Error("Укажите название команды от 1 до 1000 символов.");
-      return this.replaceProject(() => this.deps.createProject(folderPath, name.trim()));
+      const trimmed = projectName(name);
+      return this.replaceProject(() => this.deps.createProject(folderPath, trimmed));
     }),
     openProject: (folderPath: string): Promise<boolean> => this.run("transition", () =>
       this.replaceProject(() => this.deps.openProject(folderPath))),
+    /** Asks for an empty folder, then creates the project there; cancelling returns false. */
+    chooseAndCreateProject: (name: string): Promise<boolean> => this.run("transition", async () => {
+      const trimmed = projectName(name);
+      const folder = await this.pickFolder("Выберите пустую папку для команды");
+      return folder !== null && this.replaceProject(() => this.deps.createProject(folder, trimmed));
+    }),
+    chooseAndOpenProject: (): Promise<boolean> => this.run("transition", async () => {
+      const folder = await this.pickFolder("Выберите папку проекта");
+      return folder !== null && this.replaceProject(() => this.deps.openProject(folder));
+    }),
     closeProject: async (): Promise<boolean> => {
       // Window-close can arrive during a save: wait, then guard the latest draft.
       if (this.operation) await this.operation;

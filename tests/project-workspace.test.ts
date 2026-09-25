@@ -81,6 +81,7 @@ function workspace(repository = new MemoryRepository(), confirmDiscard?: (messag
   let nextId = 0;
   const dependencies = {
     createProject, openProject, id: () => `generated-${++nextId}`, confirmDiscard,
+    pickFolder: vi.fn(async (_title: string): Promise<string | null> => folderA),
     readSelectedPlan: (projectId: string) => preferences.get(projectId) ?? null,
     writeSelectedPlan: (projectId: string, planId: string) => { preferences.set(projectId, planId); },
     now: () => new Date(2026, 9, 5, 9, 7),
@@ -604,5 +605,58 @@ describe("exporting the saved quarter", () => {
     expect(await exporting).toBe(true);
     expect(await closing).toBe(true);
     expect(repository.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("choosing the project folder", () => {
+  it("creates or opens the project in the chosen folder", async () => {
+    const { controller, dependencies } = workspace();
+    expect(await controller.actions.chooseAndCreateProject("  Команда А  ")).toBe(true);
+    expect(dependencies.pickFolder).toHaveBeenLastCalledWith("Выберите пустую папку для команды");
+    expect(dependencies.createProject).toHaveBeenCalledWith(folderA, "Команда А");
+    dependencies.pickFolder.mockResolvedValueOnce(folderB);
+    expect(await controller.actions.chooseAndOpenProject()).toBe(true);
+    expect(dependencies.pickFolder).toHaveBeenLastCalledWith("Выберите папку проекта");
+    expect(dependencies.openProject).toHaveBeenCalledWith(folderB);
+  });
+
+  it("cancelling the dialog changes nothing and is not an error", async () => {
+    const { controller, dependencies } = workspace();
+    dependencies.pickFolder.mockResolvedValue(null);
+    expect(await controller.actions.chooseAndCreateProject("Команда А")).toBe(false);
+    expect(await controller.actions.chooseAndOpenProject()).toBe(false);
+    expect(dependencies.createProject).not.toHaveBeenCalled();
+    expect(dependencies.openProject).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ project: null, error: "", busy: false });
+  });
+
+  it("checks the team name before the dialog and reports dialog failures in Russian", async () => {
+    const { controller, dependencies } = workspace();
+    expect(await controller.actions.chooseAndCreateProject("   ")).toBe(false);
+    expect(dependencies.pickFolder).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().error).toBe("Укажите название команды от 1 до 1000 символов.");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    dependencies.pickFolder.mockRejectedValueOnce(new Error("dialog unavailable"));
+    expect(await controller.actions.chooseAndOpenProject()).toBe(false);
+    expect(controller.getSnapshot().error).toBe("Не удалось выбрать папку. Попробуйте ещё раз.");
+    consoleError.mockRestore();
+  });
+
+  it("closing the window waits until the folder dialog has finished", async () => {
+    const { controller, dependencies, repository } = workspace();
+    const dialog = deferred<string | null>();
+    dependencies.pickFolder.mockImplementationOnce(() => dialog.promise);
+    const opening = controller.actions.chooseAndOpenProject();
+    await vi.waitFor(() => expect(dependencies.pickFolder).toHaveBeenCalled());
+    let closed = false;
+    const closing = controller.actions.closeProject().then((result) => { closed = true; return result; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    dialog.resolve(folderA);
+    expect(await opening).toBe(true);
+    expect(await closing).toBe(true);
+    expect(repository.close).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().project).toBeNull();
   });
 });

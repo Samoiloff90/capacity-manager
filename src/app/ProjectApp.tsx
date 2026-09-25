@@ -1,5 +1,4 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectWorkspace } from "./project-workspace";
 import { PROJECT_NAME_FORM } from "./project-workspace-controller";
 import { TasksEditor } from "./TasksEditor";
@@ -91,15 +90,8 @@ export default function ProjectApp() {
     }
     setChoosingFolder(true);
     try {
-      const folder = await open({ directory: true, multiple: false,
-        title: create ? "Выберите пустую папку для команды" : "Выберите папку проекта" });
-      if (typeof folder !== "string") return;
-      const done = create
-        ? await actions.createProject(folder, newProjectName.trim())
-        : await actions.openProject(folder);
+      const done = create ? await actions.chooseAndCreateProject(newProjectName) : await actions.chooseAndOpenProject();
       if (done) { setTab("team"); setNewProjectName(""); }
-    } catch {
-      setUiError("Не удалось выбрать папку. Попробуйте ещё раз.");
     } finally { setChoosingFolder(false); }
   }
 
