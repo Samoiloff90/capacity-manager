@@ -73,7 +73,8 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
     std::fs::create_dir(&folder).unwrap();
     let app = commands::configure(tauri::test::mock_builder())
         .build(tauri::generate_context!(
-            "tests/fixtures/storage/tauri.conf.json"
+            "tests/fixtures/storage/tauri.conf.json",
+            test = true
         ))
         .expect("build isolated context without legacy preload");
     let view = commands::build_main_window(&app).unwrap();
@@ -217,7 +218,8 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
 fn app_commands_are_admitted_only_for_the_main_window_and_report_bodies_are_validated() {
     let app = commands::configure(tauri::test::mock_builder())
         .build(tauri::generate_context!(
-            "tests/fixtures/storage/tauri.conf.json"
+            "tests/fixtures/storage/tauri.conf.json",
+            test = true
         ))
         .expect("build isolated context");
     let view = commands::build_main_window(&app).unwrap();

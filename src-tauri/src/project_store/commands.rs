@@ -126,7 +126,8 @@ mod tests {
         }
         let app = configure(tauri::test::mock_builder())
             .build(tauri::generate_context!(
-                "tests/fixtures/storage/tauri.conf.json"
+                "tests/fixtures/storage/tauri.conf.json",
+                test = true
             ))
             .unwrap();
         let main = build_main_window(&app).unwrap();
