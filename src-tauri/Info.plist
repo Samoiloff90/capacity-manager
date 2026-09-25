@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by the Tauri bundler into the generated Info.plist; these keys win.
+     Russian localization makes AppKit panels and menus (Save as, Open, About, Services,
+     the WebView context menu) Russian. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>ru</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>ru</string>
+  </array>
+</dict>
+</plist>
