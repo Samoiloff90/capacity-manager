@@ -55,14 +55,18 @@ jobs:
 
       - name: Rust
         id: rust
+        run: bash scripts/ci-run.sh rustup rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
+
+      - name: Tool versions (non-blocking)
+        continue-on-error: true
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
           rustc -vV
           node --version && npm --version && python3 --version
           sw_vers && uname -m && xcodebuild -version
 
       - name: npm ci
         id: deps
+        if: ${{ !cancelled() }}
         run: bash scripts/ci-run.sh npm-ci npm ci
 
       - name: Build .app
@@ -131,6 +135,7 @@ jobs:
         with:
           path: ${{ env.MAC_ZIP }}
           archive: false
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
@@ -140,12 +145,15 @@ jobs:
         with:
           path: ${{ env.MAC_ZIP }}.sha256
           archive: false
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
-      # Runs the downloaded copy: it must start, stay up, and quit through the
-      # applicationShouldTerminate: hook (macos_app.rs), which answers Cancel and closes the
-      # main window instead. The unsaved-changes dialog itself is checked on a real Mac.
+      # Runs the copy unzipped from the uploaded zip (no quarantine, so Gatekeeper is not
+      # exercised): it must start, stay up, and quit through the applicationShouldTerminate:
+      # hook (macos_app.rs), which answers Cancel and closes the main window instead. Only
+      # the Apple Event quit with no project open is covered; the unsaved-changes dialog and
+      # the Cmd+Q menu item are checked on a real Mac.
       - name: Smoke - launch, then quit through the quit Apple Event
         id: smoke
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
@@ -157,15 +165,20 @@ jobs:
           app_log="$logs/app-smoke.log"
           as_log="$logs/osascript.log"
           : > "$as_log"
+          pid=""
           fail() {
             body="$( { echo "$1"; echo "--- osascript ---"; cat "$as_log"; echo "--- app output (tail) ---"; tail -n 40 "$app_log"; } \
               | tr -d '\r' | sed 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }')"
             echo "::error title=macOS smoke::$body"
+            kill -9 "$pid" 2>/dev/null
             exit 1
           }
           exe="$(plutil -extract CFBundleExecutable raw -o - "$SMOKE_APP/Contents/Info.plist")"
-          # The copy is outside /Applications: register it so AppleScript finds the bundle id.
-          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$SMOKE_APP" || echo "lsregister failed"
+          # The copy is outside /Applications: register it (and forget the build output with
+          # the same bundle id) so AppleScript finds the running copy by bundle id.
+          lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+          "$lsregister" -u "$APP_PATH" || echo "lsregister -u failed"
+          "$lsregister" -f "$SMOKE_APP" || echo "lsregister -f failed"
           "$SMOKE_APP/Contents/MacOS/$exe" > "$app_log" 2>&1 &
           pid=$!
           sleep 15
@@ -242,13 +255,17 @@ jobs:
 
       - name: Rust
         id: rust
+        run: bash scripts/ci-run.sh rustup rustup toolchain install "$RUST_VERSION" --profile minimal
+
+      - name: Tool versions (non-blocking)
+        continue-on-error: true
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal
           rustc -vV
           node --version && npm --version
 
       - name: npm ci
         id: deps
+        if: ${{ !cancelled() }}
         run: bash scripts/ci-run.sh npm-ci npm ci
 
       - name: Build EXE
@@ -285,6 +302,7 @@ jobs:
         with:
           path: ${{ env.WIN_ZIP }}
           archive: false
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
@@ -294,6 +312,7 @@ jobs:
         with:
           path: ${{ env.WIN_ZIP }}.sha256
           archive: false
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
