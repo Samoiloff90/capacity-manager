@@ -115,6 +115,8 @@ mod platform {
         let about = AboutMetadata {
             name: Some(APP_NAME.into()),
             version: Some(app.package_info().version.to_string()),
+            // Empty build number: otherwise AppKit shows "0.1.0 (0.1.0)" from CFBundleVersion.
+            short_version: Some(String::new()),
             ..Default::default()
         };
         let application = Submenu::with_items(
