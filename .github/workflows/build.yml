@@ -1,0 +1,310 @@
+# Builds the macOS arm64 .app and the Windows x64 portable ZIP. No secrets, no signing
+# identity: the .app gets an ad-hoc signature (tauri.conf.json, bundle.macOS).
+# Order: build and upload first, then tests, so a failing test still leaves an artifact
+# and one run reports every failure; the job stays red either way.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUST_VERSION: "1.96.1"
+  RUSTUP_TOOLCHAIN: "1.96.1"
+  NODE_VERSION: "20.13.1"
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  NO_COLOR: "1"
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+
+jobs:
+  macos:
+    name: macOS arm64 (.app)
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      APP_ID: local.capacity-planner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Rust
+        id: rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
+          rustc -vV
+          node --version && npm --version && python3 --version
+          sw_vers && uname -m && xcodebuild -version
+
+      - name: npm ci
+        id: deps
+        run: bash scripts/ci-run.sh npm-ci npm ci
+
+      - name: Build .app
+        id: build
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' && steps.deps.outcome == 'success' }}
+        run: bash scripts/ci-run.sh tauri-build npm run tauri build -- --bundles app
+
+      - name: Inspect .app
+        id: inspect
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(src-tauri/target/release/bundle/macos/*.app)
+          if [ "${#apps[@]}" -ne 1 ]; then echo "::error title=Inspect::expected 1 .app, found ${#apps[@]}"; exit 1; fi
+          app="${apps[0]}"
+          plist="$app/Contents/Info.plist"
+          get() { plutil -extract "$1" raw -o - "$plist"; }
+          must_equal() {
+            if [ "$2" != "$3" ]; then echo "::error title=Inspect::$1 is '$2', expected '$3'"; exit 1; fi
+            echo "ok: $1 = $2"
+          }
+          exe="$(get CFBundleExecutable)"
+          version="$(get CFBundleShortVersionString)"
+          must_equal bundle "$(basename "$app")" "Capacity Planner.app"
+          must_equal CFBundleIdentifier "$(get CFBundleIdentifier)" "$APP_ID"
+          must_equal CFBundleShortVersionString "$version" "$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          must_equal CFBundleDevelopmentRegion "$(get CFBundleDevelopmentRegion)" ru
+          must_equal CFBundleLocalizations.0 "$(get CFBundleLocalizations.0)" ru
+          must_equal architectures "$(lipo -archs "$app/Contents/MacOS/$exe")" arm64
+          icon="$(get CFBundleIconFile)"
+          case "$icon" in *.icns) ;; *) icon="$icon.icns" ;; esac
+          test -s "$app/Contents/Resources/$icon" || { echo "::error title=Inspect::missing Contents/Resources/$icon"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          signature="$(codesign -dv "$app" 2>&1)"
+          echo "$signature"
+          echo "$signature" | grep -qx 'Signature=adhoc' || { echo "::error title=Inspect::bundle is not ad-hoc signed"; exit 1; }
+          echo "APP_PATH=$app" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Zip with ditto and verify the round trip
+        id: package
+        if: ${{ !cancelled() && steps.inspect.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          name="Capacity-Planner-${APP_VERSION}-macos-arm64"
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          # upload-artifact keeps neither permissions nor symlinks: ship the .app zipped.
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$out/$name.zip"
+          ( cd "$out" && shasum -a 256 "$name.zip" > "$name.zip.sha256" && cat "$name.zip.sha256" )
+          check="$RUNNER_TEMP/unzipped"
+          rm -rf "$check" && mkdir -p "$check"
+          ditto -x -k "$out/$name.zip" "$check"
+          codesign --verify --deep --strict --verbose=2 "$check/Capacity Planner.app"
+          echo "MAC_ZIP=$out/$name.zip" >> "$GITHUB_ENV"
+          echo "SMOKE_APP=$check/Capacity Planner.app" >> "$GITHUB_ENV"
+          {
+            echo "### macOS: \`$name.zip\`"
+            echo "SHA-256: \`$(cut -d' ' -f1 "$out/$name.zip.sha256")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload macOS zip
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.MAC_ZIP }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload macOS checksum
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.MAC_ZIP }}.sha256
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      # Runs the downloaded copy: it must start, stay up, and quit through the
+      # applicationShouldTerminate: hook (macos_app.rs), which answers Cancel and closes the
+      # main window instead. The unsaved-changes dialog itself is checked on a real Mac.
+      - name: Smoke - launch, then quit through the quit Apple Event
+        id: smoke
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        timeout-minutes: 4
+        run: |
+          set +e
+          logs="$RUNNER_TEMP/logs"
+          mkdir -p "$logs"
+          app_log="$logs/app-smoke.log"
+          as_log="$logs/osascript.log"
+          : > "$as_log"
+          fail() {
+            body="$( { echo "$1"; echo "--- osascript ---"; cat "$as_log"; echo "--- app output (tail) ---"; tail -n 40 "$app_log"; } \
+              | tr -d '\r' | sed 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }')"
+            echo "::error title=macOS smoke::$body"
+            exit 1
+          }
+          exe="$(plutil -extract CFBundleExecutable raw -o - "$SMOKE_APP/Contents/Info.plist")"
+          # The copy is outside /Applications: register it so AppleScript finds the bundle id.
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$SMOKE_APP" || echo "lsregister failed"
+          "$SMOKE_APP/Contents/MacOS/$exe" > "$app_log" 2>&1 &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then wait "$pid"; fail "app exited during the first 15 s (exit $?)"; fi
+          grep -qF "capacity-planner: quit hook installed" "$app_log" || fail "quit hook was not installed"
+          # 'quit' needs no Automation consent. The hook cancels the quit and closes the
+          # window itself, so osascript may report -128 "User canceled": expected.
+          osascript -e 'with timeout of 20 seconds' -e "tell application id \"$APP_ID\" to quit" -e 'end timeout' > "$as_log" 2>&1
+          echo "osascript exit $?"
+          cat "$as_log"
+          for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; fail "app still running 30 s after the quit Apple Event"; fi
+          wait "$pid"
+          code=$?
+          echo "--- app output ---"
+          cat "$app_log"
+          [ "$code" -eq 0 ] || fail "app exit code $code"
+          grep -qF "capacity-planner: applicationShouldTerminate: Cancel" "$app_log" || fail "applicationShouldTerminate: hook did not run"
+          echo "smoke ok: started, stayed up 15 s, quit Apple Event -> hook -> guarded close -> exit 0"
+
+      - name: Frontend tests
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: bash scripts/ci-run.sh vitest npm test
+
+      - name: TypeScript
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: bash scripts/ci-run.sh tsc node node_modules/typescript/bin/tsc --noEmit
+
+      - name: Reference calculator
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci-run.sh reference python3 scripts/check-capacity-reference.py --check
+
+      - name: rustfmt
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: bash scripts/ci-run.sh rustfmt cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Rust tests (APFS, flock, /private/var)
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: bash scripts/ci-run.sh cargo-test cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  windows:
+    name: Windows x64 (portable ZIP)
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # package-windows.ps1 rejects reparse points anywhere up the workspace path.
+      - name: Workspace diagnostics (non-blocking)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = $env:GITHUB_WORKSPACE
+          while ($p) {
+            $item = Get-Item -LiteralPath $p -Force
+            '{0} | {1} | {2}' -f $item.FullName, $item.Attributes, $item.LinkType
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              "::error title=Workspace::$($item.FullName) is a reparse point; package-windows.ps1 rejects such paths"
+            }
+            $parent = [IO.Directory]::GetParent($p)
+            $p = if ($parent) { $parent.FullName } else { $null }
+          }
+          git config --show-origin --get-all core.autocrlf
+          powershell -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
+      - name: Rust
+        id: rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustc -vV
+          node --version && npm --version
+
+      - name: npm ci
+        id: deps
+        run: bash scripts/ci-run.sh npm-ci npm ci
+
+      - name: Build EXE
+        id: build
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' && steps.deps.outcome == 'success' }}
+        run: bash scripts/ci-run.sh tauri-build npm run tauri build -- --no-bundle
+
+      - name: Package portable ZIP (the script also verifies the archive)
+        id: package
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: >-
+          bash scripts/ci-run.sh package-windows
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          -File scripts/package-windows.ps1
+          -ExePath src-tauri/target/release/capacity-planner.exe
+
+      - name: Locate ZIP
+        id: locate
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(src-tauri/target/portable/*/*.zip)
+          if [ "${#zips[@]}" -ne 1 ]; then echo "::error title=Package::expected 1 ZIP, found ${#zips[@]}"; exit 1; fi
+          echo "WIN_ZIP=${zips[0]}" >> "$GITHUB_ENV"
+          {
+            echo "### Windows: \`$(basename "${zips[0]}")\`"
+            echo "SHA-256: \`$(cut -d' ' -f1 "${zips[0]}.sha256")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Windows ZIP
+        if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.WIN_ZIP }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Windows checksum
+        if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.WIN_ZIP }}.sha256
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Frontend tests
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: bash scripts/ci-run.sh vitest npm test
+
+      - name: TypeScript
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: bash scripts/ci-run.sh tsc node node_modules/typescript/bin/tsc --noEmit
+
+      - name: Rust tests
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: bash scripts/ci-run.sh cargo-test cargo test --manifest-path src-tauri/Cargo.toml --locked
