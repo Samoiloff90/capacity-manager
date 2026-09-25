@@ -29,14 +29,14 @@
 - SQLite через `@tauri-apps/plugin-sql`
 - Vitest
 - PapaParse
-- write-excel-file (выгрузка XLSX, DEC-024)
+- write-excel-file (выгрузка XLSX, DEC-024) и fflate (синхронное сжатие без Web Worker)
 - dayjs
 - Zod
 - TanStack Table
 
 ## Главные документы
 
-Текущая фаза: ручной квартальный сценарий с задачами реализован; DEC-021 разрешает независимую проверку расчётов и пробную Windows-поставку. 272 теста Vitest, 26 Rust-тестов и release build проходят; подготовлен ZIP с системным WebView2. DEC-023 определил целевые ОС (Windows 10/11 x64, macOS arm64) и уточнил REQ-002: фоновые обращения WebView2/WKWebView допустимы, приложение не должно передавать данные команды. Эта проверка на обеих ОС ещё не выполнена; macOS ещё не собиралась и не запускалась. Следующая функция — отчёт XLSX (DEC-024). Факты и ограничения — `docs/audit/CALCULATION_ACCEPTANCE.md` и `docs/audit/WINDOWS_PORTABLE.md`.
+Текущая фаза: ручной квартальный сценарий с задачами и отчёт XLSX (DEC-024) реализованы; DEC-021 разрешает независимую проверку расчётов и пробную Windows-поставку. 340 тестов Vitest, 38 Rust-тестов и release build проходят; пробный ZIP с системным WebView2 собран до появления отчёта. DEC-023 определил целевые ОС (Windows 10/11 x64, macOS arm64) и уточнил REQ-002: фоновые обращения WebView2/WKWebView допустимы, приложение не должно передавать данные команды. Эта проверка на обеих ОС ещё не выполнена; macOS ещё не собиралась и не запускалась. Факты и ограничения — `docs/audit/CALCULATION_ACCEPTANCE.md`, `docs/audit/WINDOWS_PORTABLE.md` и `docs/audit/REPORT_EXPORT.md`.
 
 1. Прямые решения Product Owner; подтверждённые требования фиксируются в `docs/product/REQUIREMENTS.md`.
    `docs/product/MVP.md` — согласованная первая версия и критерии приёмки.
@@ -82,6 +82,11 @@ DEC-022 (прототип AppContainer) закрыт DEC-023; его незав�
 - Не размещай бизнес-логику в React-компонентах.
 - Все формулы capacity должны быть в `src/domain/capacity/`.
 - Прикладные обращения к SQLite должны быть в `src/db/`. Узкий Rust-модуль `src-tauri/src/project_store/` отвечает за проверку, создание, открытие, миграции и закрытие БД; бизнес-формулы и прикладные репозитории в Rust не переносятся.
+- Узкий Rust-модуль `src-tauri/src/report_export.rs` только показывает системное окно
+  «Сохранить как» и записывает готовые байты отчёта; модель и XLSX строятся в
+  `src/export/`. Все IPC-команды регистрируются в `project_store::commands::configure`,
+  объявляются в `APP_COMMANDS` в `build.rs` и явно разрешаются в `capabilities/default.json`.
+  Фронтенду не выдавать `fs:*` и `dialog:allow-save`.
 - UI-компоненты не должны напрямую выполнять SQL-запросы.
 - Все данные должны сохраняться локально.
 - Приложение должно работать без интернета.
