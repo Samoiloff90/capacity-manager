@@ -28,8 +28,10 @@ WebView2. Прошлая проверка обнаружила фоновые в
 не должно передавать данные команды. Эта проверка на Windows и macOS **ещё не
 выполнена**; до её результатов рабочие данные в приложение не загружайте.
 Подробности — [проверка ZIP и сети](docs/audit/WINDOWS_PORTABLE.md).
-Целевые ОС — Windows 10/11 x64 и macOS arm64 (DEC-023); macOS-сборка ещё не
-собиралась и не запускалась.
+Целевые ОС — Windows 10/11 x64 и macOS arm64 (DEC-023). Сборка .app для Mac настроена
+в GitHub Actions (первый запуск — после публикации этапа 3); на Mac приложение ещё не
+проверялось — чек-лист в
+[MACOS_BUILD.md](docs/audit/MACOS_BUILD.md).
 
 Старый код и его тесты сохранены, но основной запуск больше не открывает прежнюю
 `capacity.db`, не запускает её миграции и не переносит данные автоматически.
@@ -63,6 +65,35 @@ WebView2. Прошлая проверка обнаружила фоновые в
 прав. Автоматизированный сценарий в WebView2 прошёл; выбор папки в нём подменялся.
 Отдельно открылся настоящий системный диалог Windows, но заполнение его поля
 не завершено из-за ограничения инструмента автоматизации.
+
+## Запустить на Mac
+
+Сборка — только для Mac на Apple Silicon (M1 и новее). Установщик, права администратора,
+Xcode, Rust и Node не нужны.
+
+1. Войдите в GitHub в браузере и откройте
+   [Actions → Build](https://github.com/Samoiloff90/capacity-manager/actions/workflows/build.yml).
+   Выберите последний запуск с зелёной отметкой и внизу страницы, в разделе
+   **Artifacts**, скачайте `Capacity-Planner-<версия>-macos-arm64.zip`. Артефакты хранятся
+   30 дней. Рядом лежит `.sha256` — контрольная сумма архива.
+2. Распакуйте архив двойным щелчком. Если Safari распаковал его сам, `Capacity Planner.app`
+   уже лежит в «Загрузках».
+3. Перенесите `Capacity Planner.app` в папку «Программы» внутри домашней папки
+   (`~/Applications`); если такой папки нет, создайте её. Права администратора для этого
+   не нужны. Предыдущую копию замените: номер версии у пробных сборок одинаковый.
+4. Запустите приложение двойным щелчком. Если macOS сообщит, что приложение не открыто:
+   - нажмите «Готово», затем откройте «Системные настройки → Конфиденциальность и
+     безопасность» и нажмите **«Всё равно открыть»**. Кнопка появляется после попытки
+     запуска примерно на час и спрашивает пароль. На Mac с управлением ИТ её может не
+     быть. «Правый клик → Открыть» на macOS 15 и новее этот запрет больше не снимает;
+   - второй способ — в «Терминале»:
+     `xattr -dr com.apple.quarantine "$HOME/Applications/Capacity Planner.app"`.
+
+   Если ИТ-политика запрещает запуск, не обходите её (DEC-023). Сборка подписана ad-hoc,
+   без сертификата разработчика и нотаризации (DEC-023a).
+
+Данные хранятся в выбранной вами папке проекта, как на Windows. Что проверить на Mac и
+как сообщить результат — [чек-лист](docs/audit/MACOS_BUILD.md#чек-лист-на-mac).
 
 ## Короткая ручная проверка
 
@@ -182,6 +213,10 @@ Workflow из распакованного приложения прошёл т�
 Windows «Сохранить как» (`scripts/report-export-smoke.mjs`). macOS и открытие файла
 в Excel не проверялись — [REPORT_EXPORT.md](docs/audit/REPORT_EXPORT.md).
 
+Этап 3, macOS: **344 теста Vitest и 42 Rust-теста на Windows — PASS**. Код меню и защиты
+выхода для macOS компилируется только в CI; workflow ещё не запускался, результаты будут
+записаны в [MACOS_BUILD.md](docs/audit/MACOS_BUILD.md).
+
 Флаг Cargo `--offline` требует заранее загруженных зависимостей.
 Windows EXE: debug-сборка — `src-tauri/target/debug/capacity-planner.exe`,
 release-сборка — `src-tauri/target/release/capacity-planner.exe`.
@@ -189,8 +224,39 @@ release-сборка — `src-tauri/target/release/capacity-planner.exe`.
 Исторические проверки проектов и задач сохранены в отдельных отчётах ниже.
 Актуальные границы переносимости и результаты прошлой проверки сети описаны в WINDOWS_PORTABLE.md.
 
+## Сборка в GitHub Actions
+
+Workflow [Build](.github/workflows/build.yml) запускается при push кода в `main`
+(правки только `*.md` и `docs/` его не запускают) и вручную: Actions → Build → Run workflow.
+Секретов в нём нет.
+
+- **macOS arm64** (`macos-26`): сборка `.app` с ad-hoc подписью, проверка Info.plist,
+  архитектуры и подписи, zip через `ditto`, запуск копии, распакованной из этого zip
+  (без карантина: Gatekeeper не проверяется), и выход через Apple Event `quit`, затем Vitest, TypeScript, контрольный калькулятор, rustfmt и
+  `cargo test`.
+- **Windows x64** (`windows-2025`): release EXE, portable ZIP скриптом
+  `scripts/package-windows.ps1` с проверкой архива, затем Vitest, TypeScript и `cargo test`.
+
+Сначала выполняются сборка и выгрузка артефактов, потом тесты: упавший тест не лишает
+сборки, но запуск остаётся красным. Ошибки шагов публикуются аннотациями
+(`scripts/ci-run.sh`) — их видно без входа в GitHub, в отличие от полных логов.
+
+Иконка рисуется в `src-tauri/icons/app-icon.svg`; `app-icon-macos.svg` — тот же рисунок
+по сетке иконок Apple. После правки SVG:
+
+```powershell
+npx tauri icon src-tauri/icons/app-icon.svg
+npx tauri icon src-tauri/icons/app-icon-macos.svg -o <временная-папка>
+```
+
+Из временной папки скопируйте только `icon.icns` в `src-tauri/icons/`, удалите
+созданные `Square*Logo.png`, `StoreLogo.png`, `android/` и `ios/`. Cargo может не
+перевстроить иконку в EXE — выполните `cargo clean -p capacity-planner --release`;
+Проводник Windows тоже кеширует иконки.
+
 ## Документы
 
+- [Сборка macOS, запуск и чек-лист на Mac](docs/audit/MACOS_BUILD.md).
 - [Отчёт XLSX: реализация и проверка](docs/audit/REPORT_EXPORT.md).
 - [Независимая числовая приёмка](docs/audit/CALCULATION_ACCEPTANCE.md).
 - [Пробный Windows ZIP и сетевое ограничение](docs/audit/WINDOWS_PORTABLE.md).
