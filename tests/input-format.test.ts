@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_DECIMAL_INPUT_CHARACTERS } from "../src/domain/capacity/decimal-exact";
-import { formatBalanceHours, formatDeficitHours, formatHours, normalizeUserDecimal } from "../src/domain/capacity/input-format";
+import { formatBalanceHours, formatDeficitHours, formatHours, normalizeUserDecimal, roundDecimal } from "../src/domain/capacity/input-format";
 
 describe("exact user decimal normalization", () => {
   it.each([
@@ -57,5 +57,24 @@ describe("hours display without changing the saved value", () => {
     expect(() => formatHours(input)).toThrow();
     expect(() => formatBalanceHours(input)).toThrow();
     expect(() => formatDeficitHours(input)).toThrow();
+  });
+});
+
+describe("exact decimal rounding shared by the screen and the report", () => {
+  it.each([
+    ["0", 2, "0"], ["252", 2, "252"], ["50.4", 2, "50.4"], ["1.005", 2, "1.01"], ["1.0049", 2, "1"],
+    ["-1.005", 2, "-1.01"], ["-0.004", 2, "0"], ["-0.001", 2, "0"], ["9.999", 2, "10"],
+    ["0.125", 0, "0"], ["2.5", 0, "3"], ["-2.5", 0, "-3"], ["12.3456", 3, "12.346"]
+  ])("rounds %s to %i places as %s", (value, places, expected) => {
+    expect(roundDecimal(value, places)).toBe(expected);
+  });
+
+  it("keeps long exact engine values without binary conversion", () => {
+    const whole = "9".repeat(MAX_DECIMAL_INPUT_CHARACTERS + 1);
+    expect(roundDecimal(`${whole}.994`, 2)).toBe(`${whole}.99`);
+  });
+
+  it.each([[-1], [1.5], [Number.NaN]])("rejects precision %s", (places) => {
+    expect(() => roundDecimal("1", places)).toThrow();
   });
 });

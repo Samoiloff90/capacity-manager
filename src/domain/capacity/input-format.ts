@@ -18,15 +18,26 @@ export function normalizeUserDecimal(input: string): string | null {
   return canonical;
 }
 
-/** Display only: half away from zero, exactly two places. Persist the original value. */
-export function formatHours(value: string): string {
+/** Exact half-away-from-zero rounding of an engine decimal; the result is canonical ("-0" becomes "0"). */
+export function roundDecimal(value: string, places: number): string {
+  if (!Number.isInteger(places) || places < 0) throw new Error("Некорректная точность округления");
   const { negative, magnitude } = decimalParts(value);
   const [whole, fraction = ""] = magnitude.split(".");
-  let hundredths = BigInt(whole) * 100n + BigInt(fraction.slice(0, 2).padEnd(2, "0"));
-  if (fraction.length > 2 && fraction[2] >= "5") hundredths += 1n;
-  const digits = hundredths.toString().padStart(3, "0");
-  const sign = negative && hundredths !== 0n ? "−" : "";
-  return `${sign}${digits.slice(0, -2)},${digits.slice(-2)} ч`;
+  let units = BigInt(whole) * 10n ** BigInt(places) + BigInt(fraction.slice(0, places).padEnd(places, "0") || "0");
+  if (fraction.length > places && fraction[places] >= "5") units += 1n;
+  if (units === 0n) return "0";
+  const digits = units.toString().padStart(places + 1, "0");
+  const integer = places ? digits.slice(0, -places) : digits;
+  const decimals = places ? digits.slice(-places).replace(/0+$/, "") : "";
+  return `${negative ? "-" : ""}${integer}${decimals ? `.${decimals}` : ""}`;
+}
+
+/** Display only: half away from zero, exactly two places. Persist the original value. */
+export function formatHours(value: string): string {
+  const rounded = roundDecimal(value, 2);
+  const negative = rounded.startsWith("-");
+  const [whole, fraction = ""] = (negative ? rounded.slice(1) : rounded).split(".");
+  return `${negative ? "−" : ""}${whole},${fraction.padEnd(2, "0")} ч`;
 }
 
 /** A strictly positive deficit must never become a displayed zero after rounding. */
