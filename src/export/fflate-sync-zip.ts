@@ -11,6 +11,9 @@ import { zipSync, type AsyncTerminable, type AsyncZipOptions, type AsyncZippable
 
 export * from "fflate/browser";
 
+/** Lets tests prove that the bare "fflate" import resolves to this module. */
+export const WORKER_FREE_ZIP = true;
+
 export function zip(data: AsyncZippable, cb: FlateCallback): AsyncTerminable;
 export function zip(data: AsyncZippable, opts: AsyncZipOptions, cb: FlateCallback): AsyncTerminable;
 export function zip(

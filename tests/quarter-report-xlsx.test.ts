@@ -103,6 +103,45 @@ describe("XLSX rendering of the quarter report", () => {
     expect(sharedStrings(files)).toEqual(expect.arrayContaining(["<t>constructor​</t>", "<t>__proto__​</t>"]));
   });
 
+  it("writes dates Excel cannot represent exactly as text", async () => {
+    const files = await workbook(readmeQuarter({ absences: [
+      { id: "a1", memberId: "z-member", startDate: "1900-01-01", endDate: "1900-02-28" },
+      { id: "a2", memberId: "z-member", startDate: "1900-03-01", endDate: "1900-03-01" }
+    ] }));
+    const strings = sharedStrings(files);
+    expect(strings).toEqual(expect.arrayContaining(["<t>01.01.1900</t>", "<t>28.02.1900</t>"]));
+    // 1900-03-01 is the first date whose Excel serial (61) is exact.
+    expect(sheetXml(files, 6)).toContain("<v>61</v>");
+    expect(sheetXml(files, 6)).not.toMatch(/<v>(2|60)<\/v>/);
+  });
+
+  it("keeps every digit: values beyond Excel's 15 significant digits become the screen text", async () => {
+    const files = await workbook(readmeQuarter({
+      directions: [
+        { id: "z-product", name: "Продукт", percent: "33.3333333333333333" },
+        { id: "a-meetings", name: "Встречи и прочее", percent: "66.6666666666666667" }
+      ],
+      tasks: [{ id: "t1", name: "Огромная", directionId: "z-product", estimateHours: "12345678901234.56" }]
+    }));
+    const strings = sharedStrings(files);
+    expect(strings).toEqual(expect.arrayContaining([
+      "<t>12345678901234,56 ч</t>", "<t>33,3333333333333333</t>", "<t>66,6666666666666667</t>"
+    ]));
+    expect(sheetXml(files, 5)).not.toContain("12345678901234.56");
+    // The allocation total is exactly 100 and stays a number.
+    expect(sheetXml(files, 1)).toContain("<v>100</v>");
+  });
+
+  it("runs the worker-free zip shim in tests and in the production Vite config", async () => {
+    expect((fflate as unknown as { WORKER_FREE_ZIP?: boolean }).WORKER_FREE_ZIP).toBe(true);
+    const { default: viteConfig, fflateSyncZipAlias } = await import("../vite.config");
+    const aliases = (viteConfig as { resolve?: { alias?: unknown } }).resolve?.alias;
+    expect(aliases).toEqual(expect.arrayContaining([fflateSyncZipAlias]));
+    expect(fflateSyncZipAlias.replacement.replace(/\\/g, "/")).toMatch(/\/src\/export\/fflate-sync-zip\.ts$/);
+    expect(fflateSyncZipAlias.find.test("fflate")).toBe(true);
+    expect(fflateSyncZipAlias.find.test("fflate/browser")).toBe(false);
+  });
+
   it("compresses large sheets without Web Workers", async () => {
     const worker = vi.fn(() => { throw new Error("Worker запрещён CSP"); });
     vi.stubGlobal("Worker", worker);

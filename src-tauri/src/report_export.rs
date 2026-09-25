@@ -197,8 +197,17 @@ fn is_locked(error: &io::Error) -> bool {
         || (cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)))
 }
 
+/// Russian reason for the user; the interface never shows English error kinds.
 fn io_failure(error: &io::Error) -> String {
-    format!("Не удалось сохранить отчёт ({:?}).", error.kind())
+    let reason = match error.kind() {
+        io::ErrorKind::NotFound => "папка не найдена",
+        io::ErrorKind::PermissionDenied => "нет доступа к папке или файлу",
+        io::ErrorKind::StorageFull => "недостаточно места на диске",
+        io::ErrorKind::ReadOnlyFilesystem => "диск доступен только для чтения",
+        io::ErrorKind::InvalidFilename => "недопустимое имя файла",
+        _ => "ошибка записи на диск",
+    };
+    format!("Не удалось сохранить отчёт: {reason}.")
 }
 
 /// The WebView passes only a default name and ready bytes; the path comes from
@@ -473,7 +482,7 @@ mod tests {
         let missing = dir.0.join("Нет такой папки").join("Отчёт.xlsx");
         assert_eq!(
             run(save_report(&guard, "Отчёт", WORKBOOK, picked(missing))),
-            Err("Не удалось сохранить отчёт (NotFound).".into())
+            Err("Не удалось сохранить отчёт: папка не найдена.".into())
         );
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 0);
     }
@@ -554,7 +563,7 @@ mod tests {
                 Err("сбой окна".into()),
                 Err(NOT_XLSX.into()),
                 Err(DIRECTORY.into()),
-                Err("Не удалось сохранить отчёт (NotFound).".into()),
+                Err("Не удалось сохранить отчёт: папка не найдена.".into()),
                 saved(&target),
             ]
         );

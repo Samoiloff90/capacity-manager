@@ -11,8 +11,10 @@ const TONE_STYLE: Record<NonNullable<ReportRow["tone"]>, CellStyle> = {
 };
 const HOURS_FORMAT = "#,##0.00";
 const DATE_FORMAT = "dd.mm.yyyy";
-// Beyond this a double no longer keeps two exact decimal places in Excel.
-const MAX_EXACT_NUMBER = 1e15;
+// Excel keeps 15 significant digits; longer values are written as the screen text.
+const MAX_EXCEL_DIGITS = 15;
+// Excel's 1900 date system counts a non-existent 29.02.1900, so earlier serials are off by one.
+const FIRST_EXACT_EXCEL_DATE = "1900-03-01";
 const ZERO_WIDTH_SPACE = "​";
 
 /** Renders the format-neutral report; percent and rate stay "General", as on screen (DEC-024). */
@@ -60,9 +62,11 @@ function toCell(cell: ReportCell, style: CellStyle): Cell {
   }
 }
 
+/** A number only when Excel can hold every digit; otherwise the same text as on screen. */
 function decimalCell(value: string, format: string | undefined, fallback: () => string, style: CellStyle): Cell {
+  const digits = value.replace(/^-/, "").replace(".", "").replace(/^0+/, "");
   const number = Number(value);
-  if (!Number.isFinite(number) || Math.abs(number) >= MAX_EXACT_NUMBER) {
+  if (digits.length > MAX_EXCEL_DIGITS || !Number.isFinite(number)) {
     return { ...style, type: String, value: fallback() };
   }
   return format ? { ...style, type: Number, value: number, format } : { ...style, type: Number, value: number };
@@ -72,8 +76,8 @@ function dateCell(value: string, style: CellStyle): Cell {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) throw new Error("Некорректная дата в отчёте.");
   const [, year, month, day] = match;
-  // Excel has no dates before 1900; keep such a date readable as text.
-  if (Number(year) < 1900) return { ...style, type: String, value: `${day}.${month}.${year}` };
+  // Excel cannot show these dates correctly; keep them readable as text.
+  if (value < FIRST_EXACT_EXCEL_DATE) return { ...style, type: String, value: `${day}.${month}.${year}` };
   // write-excel-file converts with getTime(): midnight UTC keeps the calendar date in any time zone.
   const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
   if (!Number.isFinite(date.getTime())) throw new Error("Некорректная дата в отчёте.");
