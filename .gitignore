@@ -36,3 +36,6 @@ src-tauri/gen/
 *.7z
 .secrets/
 *.log
+
+# Personal Claude Code overrides.
+.claude/settings.local.json
