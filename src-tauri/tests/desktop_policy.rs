@@ -92,8 +92,17 @@ fn production_configuration_has_no_preload_remote_capability_or_broad_permission
             "dialog:allow-open",
             "sql:allow-execute",
             "sql:allow-select",
+            "allow-project-create",
+            "allow-project-open",
+            "allow-project-close",
+            "allow-report-save-xlsx",
         ])
     );
+    // Reports are saved only through the narrow native command, never by the WebView.
+    assert!(!permissions
+        .iter()
+        .any(|permission| permission.starts_with("fs:")));
+    assert!(!permissions.contains("dialog:allow-save"));
     let production = directives(config["app"]["security"]["csp"].as_str().unwrap());
     let development = directives(config["app"]["security"]["devCsp"].as_str().unwrap());
     assert_eq!(production["connect-src"], ["ipc:", "http://ipc.localhost"]);

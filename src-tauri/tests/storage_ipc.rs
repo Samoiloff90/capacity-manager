@@ -111,13 +111,15 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
         tauri::WebviewWindowBuilder::new(&app, "untrusted-test-window", Default::default())
             .build()
             .unwrap();
+    // Declared app commands are allowed only by the main-window capability, so
+    // the ACL rejects another window before require_main runs.
     let error = request(
         &other_view,
         "project_create",
         json!({"folderPath":folder,"name":"Другое окно"}),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("главном окне"), "{error}");
+    assert!(error.to_string().contains("not allowed"), "{error}");
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
 
     let forbidden = temp.0.join("must-not-be-created.sqlite");
@@ -206,4 +208,62 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
     )
     .unwrap();
     assert!(tauri::async_runtime::block_on(app.state::<DbInstances>().0.read()).is_empty());
+}
+
+/// IMPORTANT: no request here may pass `validate_request`. MockRuntime runs
+/// main-thread tasks inline with fake window handles, so a valid body would open
+/// a real native "Save as" dialog and block the test.
+#[test]
+fn app_commands_are_admitted_only_for_the_main_window_and_report_bodies_are_validated() {
+    let app = commands::configure(tauri::test::mock_builder())
+        .build(tauri::generate_context!(
+            "tests/fixtures/storage/tauri.conf.json"
+        ))
+        .expect("build isolated context");
+    let view = commands::build_main_window(&app).unwrap();
+    let corrupted = json!({"defaultName": "Отчёт", "bytes": [1, 2, 3]});
+
+    // The capability admits every declared command; each fails later on its body.
+    for command in [
+        "project_create",
+        "project_open",
+        "project_close",
+        "report_save_xlsx",
+    ] {
+        let error = request(&view, command, json!({})).unwrap_err();
+        assert!(
+            !error.to_string().contains("not allowed")
+                && error.to_string().contains("missing required key"),
+            "{command}: {error}"
+        );
+    }
+    for (body, expected) in [
+        (corrupted.clone(), "Файл отчёта повреждён."),
+        (
+            json!({"defaultName": "Отчёт", "bytes": []}),
+            "Отчёт пустой или слишком большой для выгрузки.",
+        ),
+        (
+            json!({"defaultName": "Отчёт/..", "bytes": [80, 75, 3, 4]}),
+            "Недопустимое имя файла отчёта.",
+        ),
+    ] {
+        let error = request(&view, "report_save_xlsx", body).unwrap_err();
+        assert_eq!(error, json!(expected));
+    }
+
+    let error = request_from(
+        &view,
+        "https://example.invalid",
+        "report_save_xlsx",
+        corrupted.clone(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("not allowed"), "{error}");
+    let other_view =
+        tauri::WebviewWindowBuilder::new(&app, "untrusted-test-window", Default::default())
+            .build()
+            .unwrap();
+    let error = request(&other_view, "report_save_xlsx", corrupted).unwrap_err();
+    assert!(error.to_string().contains("not allowed"), "{error}");
 }

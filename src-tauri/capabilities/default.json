@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Local main window: project SQL, directory selection and guarded close",
+  "description": "Local main window: project lifecycle and SQL, directory selection, native report save command and guarded close",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
@@ -10,6 +10,10 @@
     "core:window:allow-destroy",
     "dialog:allow-open",
     "sql:allow-execute",
-    "sql:allow-select"
+    "sql:allow-select",
+    "allow-project-create",
+    "allow-project-open",
+    "allow-project-close",
+    "allow-report-save-xlsx"
   ]
 }

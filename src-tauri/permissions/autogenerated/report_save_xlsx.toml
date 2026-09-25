@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-report-save-xlsx"
+description = "Enables the report_save_xlsx command without any pre-configured scope."
+commands.allow = ["report_save_xlsx"]
+
+[[permission]]
+identifier = "deny-report-save-xlsx"
+description = "Denies the report_save_xlsx command without any pre-configured scope."
+commands.deny = ["report_save_xlsx"]

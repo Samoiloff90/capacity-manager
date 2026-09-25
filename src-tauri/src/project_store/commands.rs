@@ -4,11 +4,17 @@ use std::path::PathBuf;
 use tauri::{App, Runtime, State, Webview, WebviewWindow};
 use tauri_plugin_sql::DbInstances;
 
-fn require_main<R: Runtime>(view: &Webview<R>) -> Result<(), String> {
-    if view.label() == "main" && view.window().label() == "main" {
+/// Both the webview and its host window must be the configured main window.
+fn is_main(view_label: &str, window_label: &str) -> bool {
+    view_label == "main" && window_label == "main"
+}
+
+/// Shared by project lifecycle and report export commands, behind the ACL.
+pub(crate) fn require_main<R: Runtime>(view: &Webview<R>) -> Result<(), String> {
+    if is_main(view.label(), view.window().label()) {
         Ok(())
     } else {
-        Err("Команда проекта доступна только в главном окне".into())
+        Err("Команда доступна только в главном окне.".into())
     }
 }
 
@@ -55,16 +61,21 @@ pub async fn project_close<R: Runtime>(
         .map_err(|error| error.to_string())
 }
 
-/// One application-owned store, no implicit database creation or legacy preload.
+/// Composition root for all application IPC commands: one application-owned
+/// store, the report export guard, no implicit database creation or legacy preload.
+/// Every command listed here must also be declared in `build.rs` and allowed in
+/// `capabilities/default.json`.
 pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder
         .manage(ProjectStore::new())
+        .manage(crate::report_export::ReportExportGuard::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             project_create,
             project_open,
-            project_close
+            project_close,
+            crate::report_export::report_save_xlsx
         ])
 }
 
@@ -101,4 +112,32 @@ pub fn build_main_window<R: Runtime>(
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .build()?;
     Ok(window)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commands_require_the_main_webview_in_the_main_window() {
+        assert!(is_main("main", "main"));
+        for (view, window) in [("main", "other"), ("other", "main"), ("other", "other")] {
+            assert!(!is_main(view, window), "{view}/{window}");
+        }
+        let app = configure(tauri::test::mock_builder())
+            .build(tauri::generate_context!(
+                "tests/fixtures/storage/tauri.conf.json"
+            ))
+            .unwrap();
+        let main = build_main_window(&app).unwrap();
+        assert_eq!(require_main(main.as_ref()), Ok(()));
+        let other =
+            tauri::WebviewWindowBuilder::new(&app, "untrusted-test-window", Default::default())
+                .build()
+                .unwrap();
+        assert_eq!(
+            require_main(other.as_ref()),
+            Err("Команда доступна только в главном окне.".to_string())
+        );
+    }
 }
