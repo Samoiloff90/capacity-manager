@@ -7,6 +7,10 @@ import { resolve } from "node:path";
 
 const port = Number(process.argv[2] ?? 19323);
 const emulateOffline = process.env.CAPACITY_SMOKE_OFFLINE === "1";
+// Network check (scripts/network-check-windows.ps1): unique strings appended to names the
+// script never compares, so they can be searched for in everything sent over the network.
+const marker = (process.env.CAPACITY_SMOKE_MARKER ?? "").trim();
+const marked = (text) => marker ? `${text} ${marker}` : text;
 assert(Number.isInteger(port) && port >= 1024 && port < 65536);
 const root = resolve("src-tauri/target", `workflow-smoke-${Date.now()}`);
 const folderA = resolve(root, "Команда А");
@@ -191,12 +195,12 @@ try {
   await click("Открыть папку проекта");
   assert(await evaluate("Boolean(document.querySelector('.project-welcome'))"));
   await folder(folderA);
-  await input(".project-welcome input", "Тестовая команда А");
+  await input(".project-welcome input", marked("Тестовая команда А"));
   await click("Выбрать папку и создать");
   await createQuarter(4);
   await expectHours("0 ч");
   await click("Добавить сотрудника");
-  await input(aria("Имя сотрудника 1"), "Тестовый участник");
+  await input(aria("Имя сотрудника 1"), marked("Тестовый участник"));
   await input(aria("Ставка сотрудника 1"), "0,5");
   await expectHours("256 ч");
   await click("Отсутствия");
@@ -313,7 +317,7 @@ try {
   await waitFor("Boolean(document.querySelector('.project-welcome'))");
   // A second folder must have independent metadata, people and plans.
   await folder(folderB);
-  await input(".project-welcome input", "Тестовая команда Б");
+  await input(".project-welcome input", marked("Тестовая команда Б"));
   await click("Выбрать папку и создать");
   await createQuarter(4);
   await expectHours("0 ч");

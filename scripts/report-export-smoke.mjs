@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const port = Number(process.argv[2] ?? 19324);
+// Network check (scripts/network-check-windows.ps1): unique strings in the team, member and
+// task names, searched for later in everything sent over the network.
+const marker = (process.env.CAPACITY_SMOKE_MARKER ?? "").trim();
+const marked = (text) => marker ? `${text} ${marker}` : text;
 assert(Number.isInteger(port) && port >= 1024 && port < 65536);
 assert.equal(process.platform, "win32", "UI Automation of the save dialog is Windows-only");
 const root = join(tmpdir(), `capacity report smoke ${Date.now()}`);
@@ -225,7 +229,7 @@ try {
     };
   })()`);
   await evaluate(`window.__smokeFolder = ${JSON.stringify(projectFolder)}`);
-  await input(".project-welcome input", "Тестовая команда: отчёт/Q4");
+  await input(".project-welcome input", marked("Тестовая команда: отчёт/Q4"));
   await click("Выбрать папку и создать");
   await input(".project-year input", "2026");
   await input(".project-period-bar form select", "4");
@@ -236,11 +240,11 @@ try {
   await replaceQuarter((snapshot) => ({
     ...snapshot,
     calendar: snapshot.calendar.map((day) => day.date === "2026-10-03" ? { ...day, isWorking: true } : day),
-    members: [{ id: "m1", name: "Тестовый сотрудник", competencyId: snapshot.competencies[0].id, fte: "0.5" }],
+    members: [{ id: "m1", name: marked("Тестовый сотрудник"), competencyId: snapshot.competencies[0].id, fte: "0.5" }],
     absences: [{ id: "a1", memberId: "m1", startDate: "2026-10-01", endDate: "2026-10-02" }],
     directions: [{ id: "d1", name: "Продукт", percent: "20" }, { id: "d2", name: "Встречи и прочее", percent: "80" }],
     tasks: [
-      { id: "t1", name: "Задача 30", directionId: "d1", estimateHours: "30" },
+      { id: "t1", name: marked("Задача 30"), directionId: "d1", estimateHours: "30" },
       { id: "t2", name: "Задача 25", directionId: "d1", estimateHours: "25" }
     ]
   }));
@@ -258,7 +262,7 @@ try {
   // 1. Cancel: nothing is written and no message appears.
   await click("Выгрузить отчёт");
   results.defaultName = await driveSaveDialog("cancel");
-  assert.equal(results.defaultName, "Capacity Тестовая команда отчёт Q4 2026 Q4.xlsx");
+  assert.equal(results.defaultName, `Capacity ${marked("Тестовая команда отчёт Q4")} 2026 Q4.xlsx`);
   await waitFor(`!${buttonExpression("Выгрузить отчёт")}.disabled`, "export enabled after cancel");
   assert(!/Отчёт сохранён|Не удалось/.test(await text()), "Cancel shows no message");
   assert.deepEqual(await readdir(reportFolder), []);
