@@ -2,12 +2,16 @@
 # identity: the .app gets an ad-hoc signature (tauri.conf.json, bundle.macOS).
 # Order: build and upload first, then tests, so a failing test still leaves an artifact
 # and one run reports every failure; the job stays red either way.
+# A pushed tag vX.Y.Z (only on the PO's command, DEC-025) also publishes a GitHub release
+# with both builds; scripts/check-release.mjs checks the tag before anything is built.
 name: Build
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ["v*"]
+    # Path filters do not apply to tag pushes: a release tag always builds.
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -46,6 +50,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Release tag preflight
+        if: github.ref_type == 'tag'
+        run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
 
       - name: Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -181,6 +189,12 @@ jobs:
           "$lsregister" -f "$SMOKE_APP" || echo "lsregister -f failed"
           "$SMOKE_APP/Contents/MacOS/$exe" > "$app_log" 2>&1 &
           pid=$!
+          # The network watch the PO runs, here on a stock environment (bash 3.2, system
+          # tools only) attached to this process; it ends a few seconds after the app.
+          env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="$RUNNER_TEMP" TERM=dumb \
+            /bin/bash scripts/capacity-network-watch-macos.sh --pid "$pid" --out "$logs/network" \
+            --max-seconds 120 --debug > "$logs/network-watch.log" 2>&1 &
+          watch_pid=$!
           sleep 15
           if ! kill -0 "$pid" 2>/dev/null; then wait "$pid"; fail "app exited during the first 15 s (exit $?)"; fi
           grep -qF "capacity-planner: quit hook installed" "$app_log" || fail "quit hook was not installed"
@@ -198,6 +212,31 @@ jobs:
           [ "$code" -eq 0 ] || fail "app exit code $code"
           grep -qF "capacity-planner: applicationShouldTerminate: Cancel" "$app_log" || fail "applicationShouldTerminate: hook did not run"
           echo "smoke ok: started, stayed up 15 s, quit Apple Event -> hook -> guarded close -> exit 0"
+          # The watch is a diagnostic: a hang or failure is reported, it does not fail the build.
+          for _ in $(seq 1 60); do kill -0 "$watch_pid" 2>/dev/null || break; sleep 1; done
+          kill "$watch_pid" 2>/dev/null
+          wait "$watch_pid"
+          watch_code=$?
+          cat "$logs/network-watch.log"
+          report="$(ls "$logs"/network/capacity-network-*.txt 2>/dev/null | head -n 1)"
+          if [ "$watch_code" -ne 0 ] || [ -z "$report" ]; then
+            echo "::warning title=macOS network watch::no report (exit $watch_code); see the network-watch log"
+            exit 0
+          fi
+          cat "$report"
+          { echo "### macOS: network watch (idle launch and quit)"; echo '```'; cat "$report"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # Readable without a GitHub login through the Checks API.
+          echo "::notice title=macOS network watch::$(tr -d '\r' < "$report" | sed 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }')"
+
+      - name: Upload macOS network watch logs
+        if: ${{ !cancelled() && steps.smoke.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-network-watch
+          path: ${{ runner.temp }}/logs/network
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 30
 
       - name: Frontend tests
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
@@ -228,6 +267,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Release tag preflight
+        if: github.ref_type == 'tag'
+        run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
 
       - name: Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -327,3 +370,88 @@ jobs:
       - name: Rust tests
         if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
         run: bash scripts/ci-run.sh cargo-test cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  # Runs after every successful build, so downloading, naming, checksums and notes are
+  # proven before a tag is pushed. Read-only; publishing is the separate "release" job.
+  release-check:
+    name: Release files check
+    needs: [macos, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Version
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            node scripts/check-release.mjs "$GITHUB_REF_NAME"
+            echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+          fi
+
+      # skip-decompress: both assets are zips uploaded without an archive layer; without it
+      # the action would unpack them and the .app would lose permissions and symlinks.
+      - name: Download builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: Capacity-Planner-*
+          merge-multiple: true
+          skip-decompress: true
+          path: ${{ runner.temp }}/release
+
+      - name: Verify files and notes
+        run: |
+          bash scripts/prepare-release.sh "$RELEASE_VERSION" "$RUNNER_TEMP/release" "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: GitHub release
+    needs: [release-check]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Release tag check
+        run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
+
+      - name: Download builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: Capacity-Planner-*
+          merge-multiple: true
+          skip-decompress: true
+          path: ${{ runner.temp }}/release
+
+      - name: Verify files and notes
+        run: bash scripts/prepare-release.sh "${GITHUB_REF_NAME#v}" "$RUNNER_TEMP/release" "$RUNNER_TEMP/notes.md"
+
+      # Fails closed: anything but "pre" or "full" stops the release, so a 0.x version can
+      # never be published as the latest release by mistake.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          kind="$(node scripts/check-release.mjs --kind "$GITHUB_REF_NAME")"
+          case "$kind" in
+            pre) prerelease="--prerelease" ;;
+            full) prerelease="" ;;
+            *) echo "::error title=Release::cannot classify $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Capacity Planner ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json url,isPrerelease,assets \
+            --jq '"\(.url) prerelease=\(.isPrerelease) assets=\([.assets[].name] | join(", "))"'

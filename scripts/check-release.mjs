@@ -2,8 +2,9 @@
 // Release preflight: the tag vX.Y.Z must match the application version in every file
 // that carries it, and docs/releases/<tag>.md must hold the release notes.
 // Usage: node scripts/check-release.mjs v0.1.0   (exits 1 and prints the problems)
+//        node scripts/check-release.mjs --kind v0.1.0   (prints "pre" or "full")
 // Also imported by tests/app-version.test.ts.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,7 +46,18 @@ export function isPrerelease(tag) {
   return version.startsWith("0.") || version.includes("-");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const isMain = (() => {
+  try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+})();
+
+if (isMain && process.argv[2] === "--kind") {
+  // Prints "pre" or "full"; any failure exits non-zero, so a release is never published
+  // as "Latest" by mistake.
+  const tag = process.argv[3] ?? "";
+  if (!TAG_PATTERN.test(tag)) { console.error(`Тег «${tag}» не в формате vX.Y.Z.`); process.exit(1); }
+  console.log(isPrerelease(tag) ? "pre" : "full");
+} else if (isMain) {
   const tag = process.argv[2];
   const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
   const problems = checkReleaseTag(tag, root);
