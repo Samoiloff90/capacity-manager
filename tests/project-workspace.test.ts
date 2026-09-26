@@ -152,12 +152,12 @@ describe("project workspace lifecycle and unsaved changes", () => {
     expect(controller.getSnapshot().dirty).toBe(false);
     expect(controller.getSnapshot().activePlanId).toBe(stored.planId);
 
-    expect(await controller.actions.createPlan(2027, 1, "ru-official")).toBe(false);
+    expect(await controller.actions.createPlan(2028, 1, "ru-official")).toBe(false);
     expect(repository.create).toHaveBeenCalledTimes(1);
     expect(controller.getSnapshot().error).toBeTruthy();
-    expect(await controller.actions.createPlan(2027, 1, "manual")).toBe(true);
+    expect(await controller.actions.createPlan(2028, 1, "manual")).toBe(true);
     expect(controller.getSnapshot().draft?.calendarSource?.kind).toBe("manual");
-    expect(controller.getSnapshot().draft?.calendar).toHaveLength(90);
+    expect(controller.getSnapshot().draft?.calendar).toHaveLength(91); // leap year
   });
 
   it("reopens the selected saved quarter, calculates its draft, and keeps another plan unchanged", async () => {
@@ -197,7 +197,7 @@ describe("project workspace lifecycle and unsaved changes", () => {
     await controller.actions.openProject(folderA);
     await controller.actions.selectPlan("q2");
     expect(controller.getSnapshot().activePlanId).toBe("q2");
-    // Official 2027 is intentionally unavailable; this request refers to an existing plan.
+    // Official 2027 is bundled now, but the existing manual plan is selected, not regenerated.
     expect(await controller.actions.createPlan(2027, 1)).toBe(true);
     expect(controller.getSnapshot().activePlanId).toBe(saved.planId);
     expect(controller.getSnapshot().draft).toEqual(saved.snapshot);

@@ -5,7 +5,8 @@ import type { QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.ty
 import { validateQuarterSnapshot } from "../src/domain/capacity/quarter-snapshot.validation";
 import {
   BUNDLED_CALENDAR_YEARS, CalendarMode, createQuarterCalendar, getCalendarOverrides,
-  MANUAL_CALENDAR_VERSION, RU_2026_CALENDAR_SOURCES, RU_2026_CALENDAR_VERSION
+  MANUAL_CALENDAR_VERSION, RU_2026_CALENDAR_SOURCES, RU_2026_CALENDAR_VERSION,
+  RU_2027_CALENDAR_SOURCES, RU_2027_CALENDAR_VERSION
 } from "../src/domain/capacity/project-calendar";
 
 function generated(year = 2026, quarter: Quarter = 1, mode: CalendarMode = "ru-official") {
@@ -26,7 +27,16 @@ function snapshot(year = 2026, quarter: Quarter = 1): QuarterSnapshot {
 
 function isWorking(date: string): boolean | undefined {
   const quarter = (Math.floor((Number(date.slice(5, 7)) - 1) / 3) + 1) as Quarter;
-  return generated(2026, quarter).calendar.find((day) => day.date === date)?.isWorking;
+  return generated(Number(date.slice(0, 4)), quarter).calendar.find((day) => day.date === date)?.isWorking;
+}
+
+function yearDays(year: number) {
+  return ([1, 2, 3, 4] as const).flatMap((quarter) => generated(year, quarter).calendar);
+}
+
+function isWeekend(date: string): boolean {
+  const day = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
 }
 
 function freezeDeep<T>(value: T): T {
@@ -50,7 +60,7 @@ describe("bundled RF 2026 calendar", () => {
   );
 
   it("has 247 working dates, with independently specified monthly counts", () => {
-    const dates = ([1, 2, 3, 4] as const).flatMap((quarter) => generated(2026, quarter).calendar);
+    const dates = yearDays(2026);
     const counts = Array.from({ length: 12 }, (_, index) => dates.filter(
       (day) => Number(day.date.slice(5, 7)) === index + 1 && day.isWorking
     ).length);
@@ -83,9 +93,21 @@ describe("bundled RF 2026 calendar", () => {
     if (calculated.ok) expect(calculated.result.totals.availableHours).toBe("496");
   });
 
+  it("is unchanged by the 2027 addition: exact non-working weekdays, no working weekends", () => {
+    const days = yearDays(2026);
+    expect(days.filter((day) => !day.isWorking && !isWeekend(day.date)).map((day) => day.date)).toEqual([
+      "2026-01-01", "2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09",
+      "2026-02-23", "2026-03-09", "2026-05-01", "2026-05-11", "2026-06-12", "2026-11-04", "2026-12-31"
+    ]);
+    expect(days.filter((day) => day.isWorking && isWeekend(day.date))).toEqual([]);
+  });
+
   it("records the sources and exact bundled version", () => {
     const result = generated();
-    expect(BUNDLED_CALENDAR_YEARS).toEqual([2026]);
+    expect(BUNDLED_CALENDAR_YEARS).toEqual([2026, 2027]);
+    // Saved plans store these strings; they must never change for a published calendar.
+    expect(RU_2026_CALENDAR_VERSION).toBe("ru-2026-tk112-pp1466-2025-09-24-v1");
+    expect(RU_2027_CALENDAR_VERSION).toBe("ru-2027-tk112-pp1187-2026-09-17-v1");
     expect(result.calendarSource).toMatchObject({
       kind: "ru-official", version: RU_2026_CALENDAR_VERSION,
       sourceUrls: RU_2026_CALENDAR_SOURCES.map((source) => source.url)
@@ -94,8 +116,74 @@ describe("bundled RF 2026 calendar", () => {
   });
 });
 
+describe("bundled RF 2027 calendar (TK 112, PP 1187 of 17.09.2026)", () => {
+  it.each([[1, 56, 90], [2, 62, 91], [3, 66, 92], [4, 63, 92]] as const)(
+    "quarter %s has %s working dates among %s calendar dates", (quarter, working, total) => {
+      const result = generated(2027, quarter);
+      expect(result.calendar).toHaveLength(total);
+      expect(result.calendar.filter((day) => day.isWorking)).toHaveLength(working);
+      expect(result.calendarSource.baseWorkingDates).toHaveLength(working);
+      expect(validateQuarterSnapshot(snapshot(2027, quarter), { requireCompleteCalendar: true }).ok).toBe(true);
+    }
+  );
+
+  it("has 247 working dates, with monthly counts from the published production calendar", () => {
+    const dates = yearDays(2027);
+    const counts = Array.from({ length: 12 }, (_, index) => dates.filter(
+      (day) => Number(day.date.slice(5, 7)) === index + 1 && day.isWorking
+    ).length);
+    expect(counts).toEqual([15, 19, 22, 22, 19, 21, 22, 22, 22, 21, 20, 22]);
+    expect(counts.reduce((sum, count) => sum + count, 0)).toBe(247);
+  });
+
+  it("has exactly these non-working weekdays and one working Saturday", () => {
+    const days = yearDays(2027);
+    expect(days.filter((day) => !day.isWorking && !isWeekend(day.date)).map((day) => day.date)).toEqual([
+      "2027-01-01", "2027-01-04", "2027-01-05", "2027-01-06", "2027-01-07", "2027-01-08",
+      "2027-02-22", "2027-02-23", "2027-03-08", "2027-05-03", "2027-05-10", "2027-06-14",
+      "2027-11-04", "2027-11-05", "2027-12-31"
+    ]);
+    expect(days.filter((day) => day.isWorking && isWeekend(day.date)).map((day) => day.date)).toEqual(["2027-02-20"]);
+  });
+
+  it.each(["2027-01-02", "2027-01-03", "2027-01-09", "2027-01-10", "2027-02-21", "2027-05-01", "2027-05-09", "2027-06-12"])(
+    "keeps weekend %s non-working", (date) => expect(isWorking(date)).toBe(false)
+  );
+
+  it.each(["2027-01-11", "2027-02-19", "2027-02-24", "2027-05-04", "2027-11-08", "2027-12-30"])(
+    "does not add an extra day off on %s", (date) => expect(isWorking(date)).toBe(true)
+  );
+
+  it.each(["2027-02-20", "2027-04-30", "2027-06-11", "2027-11-03"])(
+    "keeps holiday-eve %s as a full working date under the MVP", (date) => expect(isWorking(date)).toBe(true)
+  );
+
+  it("records the sources and exact bundled version", () => {
+    const result = generated(2027, 1);
+    expect(result.calendarSource).toMatchObject({
+      kind: "ru-official", version: RU_2027_CALENDAR_VERSION,
+      sourceUrls: RU_2027_CALENDAR_SOURCES.map((source) => source.url)
+    });
+    expect(result.calendarSource.baseWorkingDates).toContain("2027-02-20");
+    expect(getCalendarOverrides(result)).toEqual([]);
+  });
+
+  it("counts the working Saturday for absences and FTE", () => {
+    const base = snapshot(2027, 1);
+    const plan: QuarterSnapshot = {
+      ...base,
+      members: [{ ...base.members[0], fte: "0.5" }],
+      absences: [{ id: "abs", memberId: "one", startDate: "2027-02-19", endDate: "2027-02-23" }]
+    };
+    const calculated = calculateQuarterCapacity(plan);
+    expect(calculated.ok).toBe(true);
+    // 56 working dates minus Fri 19 and Sat 20 Feb (21-23 Feb are days off) = 54 days x 8 h x 0.5.
+    if (calculated.ok) expect(calculated.result.totals.availableHours).toBe("216");
+  });
+});
+
 describe("manual calendar and immutable provenance", () => {
-  it.each([2025, 2027, 2030])("requires an explicit manual choice for %s", (year) => {
+  it.each([2025, 2028, 2030])("requires an explicit manual choice for %s", (year) => {
     const result = createQuarterCalendar(year, 1);
     expect(result).toMatchObject({ ok: false, reason: "needs-manual" });
     expect(result).not.toHaveProperty("calendar");

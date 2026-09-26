@@ -305,8 +305,8 @@ try {
   await expectHours("0 ч");
   await input(".project-plan-select select", q4);
   await expectHours("252 ч");
-  // Unknown year requires an explicit manual mode, then remains an independent plan.
-  await input(".project-year input", "2027");
+  // A year without a bundled calendar requires an explicit manual mode, then remains an independent plan.
+  await input(".project-year input", "2028");
   assert(await evaluate("Array.from(document.querySelectorAll('button')).find(e => e.textContent === 'Создать квартал').disabled"));
   await evaluate("document.querySelector('.project-confirmation input').click()");
   await click("Создать квартал");

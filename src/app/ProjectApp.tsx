@@ -73,7 +73,7 @@ export default function ProjectApp() {
   const result = state.calculation?.ok ? state.calculation.result : null;
   const year = Number(yearText);
   const validYear = /^\d{1,4}$/.test(yearText) && year >= 1 && year <= 9999;
-  const officialCalendar = (BUNDLED_CALENDAR_YEARS as readonly number[]).includes(year);
+  const officialCalendar = BUNDLED_CALENDAR_YEARS.includes(year);
 
   useEffect(() => {
     setProjectNameDraft(projectName ?? "");

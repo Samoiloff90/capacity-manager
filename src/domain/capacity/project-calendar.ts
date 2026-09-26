@@ -7,32 +7,79 @@ export type CreateQuarterCalendarResult =
   | ({ ok: true } & QuarterCalendar)
   | { ok: false; reason: "needs-manual"; message: string };
 
-export const BUNDLED_CALENDAR_YEARS = [2026] as const;
 export const RU_2026_CALENDAR_VERSION = "ru-2026-tk112-pp1466-2025-09-24-v1";
+export const RU_2027_CALENDAR_VERSION = "ru-2027-tk112-pp1187-2026-09-17-v1";
 export const MANUAL_CALENDAR_VERSION = "manual-weekdays-v1";
+
+const TK_112_SOURCE = {
+  title: "ТК РФ, статья 112 — текст на сайте Минтруда России",
+  url: "https://mintrud.gov.ru/labour/relationship/351"
+} as const;
 
 /** Attribution only. The application never fetches these sources at runtime. */
 export const RU_2026_CALENDAR_SOURCES = [
-  {
-    title: "ТК РФ, статья 112 — текст на сайте Минтруда России",
-    url: "https://mintrud.gov.ru/labour/relationship/351"
-  },
+  TK_112_SOURCE,
   {
     title: "Постановление Правительства РФ от 24.09.2025 № 1466",
     url: "https://government.ru/docs/all/161028/"
   }
 ] as const;
 
-// Federal non-working dates only, for the five-day week in 2026.
-// Jan 9 and Dec 31: PP 1466; Mar 9 and May 11: TK 112 weekend overlap.
-// Jan 3/4 remain non-working holidays; the transfer does not make them workdays.
-const RU_2026_NON_WORKING = new Set([
-  "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04",
-  "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09",
-  "2026-02-23", "2026-03-08", "2026-03-09",
-  "2026-05-01", "2026-05-09", "2026-05-11", "2026-06-12",
-  "2026-11-04", "2026-12-31"
+/** Attribution only. The application never fetches these sources at runtime. */
+export const RU_2027_CALENDAR_SOURCES = [
+  TK_112_SOURCE,
+  {
+    title: "Постановление Правительства РФ от 17.09.2026 № 1187 — сообщение на сайте Правительства",
+    url: "http://government.ru/dep_news/59913/"
+  },
+  {
+    title: "Постановление Правительства РФ от 17.09.2026 № 1187 — текст (PDF)",
+    url: "http://static.government.ru/media/files/Rcbz6Xcgzzt7GLO5H0Ib0b1uNU5ARsKQ.pdf"
+  }
+] as const;
+
+type BundledCalendar = {
+  version: string;
+  sources: readonly { title: string; url: string }[];
+  /** Days off among Mon–Fri. Weekend dates listed here change nothing: weekends are off anyway. */
+  nonWorking: ReadonlySet<string>;
+  /** Sat/Sun dates that are working days (a day off moved to a weekday). */
+  workingWeekends: ReadonlySet<string>;
+};
+
+// Federal non-working dates only, for the five-day week.
+const RU_CALENDARS: ReadonlyMap<number, BundledCalendar> = new Map([
+  // Jan 9 and Dec 31: PP 1466; Mar 9 and May 11: TK 112 weekend overlap.
+  // Jan 3/4 remain non-working holidays; the transfer does not make them workdays.
+  [2026, {
+    version: RU_2026_CALENDAR_VERSION,
+    sources: RU_2026_CALENDAR_SOURCES,
+    nonWorking: new Set([
+      "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04",
+      "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09",
+      "2026-02-23", "2026-03-08", "2026-03-09",
+      "2026-05-01", "2026-05-09", "2026-05-11", "2026-06-12",
+      "2026-11-04", "2026-12-31"
+    ]),
+    workingWeekends: new Set<string>()
+  }],
+  // PP 1187: Sat Jan 2 -> Fri Nov 5, Sun Jan 3 -> Fri Dec 31, Sat Feb 20 -> Mon Feb 22
+  // (so Feb 20 is a working Saturday). TK 112 weekend overlap: May 1 -> May 3,
+  // May 9 -> May 10, Jun 12 -> Jun 14.
+  [2027, {
+    version: RU_2027_CALENDAR_VERSION,
+    sources: RU_2027_CALENDAR_SOURCES,
+    nonWorking: new Set([
+      "2027-01-01", "2027-01-04", "2027-01-05", "2027-01-06", "2027-01-07", "2027-01-08",
+      "2027-02-22", "2027-02-23", "2027-03-08",
+      "2027-05-03", "2027-05-10", "2027-06-14",
+      "2027-11-04", "2027-11-05", "2027-12-31"
+    ]),
+    workingWeekends: new Set(["2027-02-20"])
+  }]
 ]);
+
+export const BUNDLED_CALENDAR_YEARS: readonly number[] = [...RU_CALENDARS.keys()];
 
 /**
  * Call only when creating a new plan, never to refresh an opened snapshot.
@@ -47,7 +94,8 @@ export function createQuarterCalendar(
 ): CreateQuarterCalendarResult {
   const dates = getQuarterDates(year, quarter);
   if (mode !== "ru-official" && mode !== "manual") throw new Error("Неизвестный режим календаря");
-  if (mode === "ru-official" && year !== 2026) {
+  const bundled = mode === "ru-official" ? RU_CALENDARS.get(year) : undefined;
+  if (mode === "ru-official" && !bundled) {
     return {
       ok: false,
       reason: "needs-manual",
@@ -56,16 +104,18 @@ export function createQuarterCalendar(
   }
   const calendar = dates.map((date) => ({
     date,
-    isWorking: isWeekday(date) && (mode === "manual" || !RU_2026_NON_WORKING.has(date))
+    isWorking: bundled
+      ? isWeekday(date) ? !bundled.nonWorking.has(date) : bundled.workingWeekends.has(date)
+      : isWeekday(date)
   }));
   return {
     ok: true,
     calendar,
     calendarSource: {
       kind: mode,
-      version: mode === "ru-official" ? RU_2026_CALENDAR_VERSION : MANUAL_CALENDAR_VERSION,
+      version: bundled ? bundled.version : MANUAL_CALENDAR_VERSION,
       baseWorkingDates: calendar.filter((day) => day.isWorking).map((day) => day.date),
-      sourceUrls: mode === "ru-official" ? RU_2026_CALENDAR_SOURCES.map((source) => source.url) : []
+      sourceUrls: bundled ? bundled.sources.map((source) => source.url) : []
     }
   };
 }

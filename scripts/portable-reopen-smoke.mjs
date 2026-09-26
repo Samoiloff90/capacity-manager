@@ -238,7 +238,7 @@ try {
     query: 'SELECT plan_id, year, quarter, revision, payload_json FROM quarter_plans ORDER BY year, quarter', values: []
   })`);
   assert.deepEqual(rows.map(({ year, quarter }) => ({ year, quarter })), [
-    { year: 2026, quarter: 1 }, { year: 2026, quarter: 4 }, { year: 2027, quarter: 1 }
+    { year: 2026, quarter: 1 }, { year: 2026, quarter: 4 }, { year: 2028, quarter: 1 }
   ]);
   const selected = rows.find((row) => row.plan_id === selection.id);
   assert(selected);

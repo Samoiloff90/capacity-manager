@@ -13,7 +13,9 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 /** External URLs the UI may contain: calendar sources shown as plain text. */
 const ALLOWED_URLS = new Set([
   "https://mintrud.gov.ru/labour/relationship/351",
-  "https://government.ru/docs/all/161028/"
+  "https://government.ru/docs/all/161028/",
+  "http://government.ru/dep_news/59913/",
+  "http://static.government.ru/media/files/Rcbz6Xcgzzt7GLO5H0Ib0b1uNU5ARsKQ.pdf"
 ]);
 
 const FORBIDDEN: Array<[string, RegExp]> = [
