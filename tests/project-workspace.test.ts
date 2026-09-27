@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PROJECT_NAME_FORM, ProjectWorkspaceController, type WorkspaceRepository } from "../src/app/project-workspace-controller";
+import { PROJECT_NAME_FORM, ProjectWorkspaceController, type DiscardAnswer, type WorkspaceRepository } from "../src/app/project-workspace-controller";
 import type { QuarterReport } from "../src/export/quarter-report";
 import type { ReportSaveOutcome } from "../src/export/report-file";
 import { ProjectPersistenceError, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
@@ -74,7 +74,7 @@ class MemoryRepository implements WorkspaceRepository {
   });
 }
 
-function workspace(repository = new MemoryRepository(), confirmDiscard?: (message: string) => Promise<boolean>) {
+function workspace(repository = new MemoryRepository(), confirmDiscard?: (message: string, canSave: boolean) => Promise<DiscardAnswer>) {
   const preferences = new Map<string, string>();
   const createProject = vi.fn(async (_folder: string, _name: string): Promise<WorkspaceRepository> => repository);
   const openProject = vi.fn(async (_folder: string): Promise<WorkspaceRepository> => repository);
@@ -257,7 +257,7 @@ describe("project workspace lifecycle and unsaved changes", () => {
     const { controller, repository } = workspace();
     await controller.actions.openProject(folderA);
     await controller.actions.selectPlan("q1");
-    changeFte(controller, "0,5");
+    changeFte(controller, "1e3");
     expect(await controller.actions.save()).toBe(false);
     expect(controller.getSnapshot().dirty).toBe(true);
     expect(controller.getSnapshot().error).toBeTruthy();
@@ -493,6 +493,160 @@ describe("project workspace lifecycle and unsaved changes", () => {
     expect(await controller.actions.save()).toBe(true);
     expect(controller.getSnapshot().dirty).toBe(false);
     expect(repository.rows.get("q2")?.snapshot.tasks[0].estimateHours).toBe("10.25");
+  });
+});
+
+describe("unsaved-changes dialog with saving", () => {
+  it("«Сохранить и продолжить» saves the draft, then switches the quarter", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    const switching = controller.actions.selectPlan("q2");
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toEqual({
+      message: "В квартале «1 квартал 2026 года» есть несохранённые изменения. Сохранить их перед продолжением?", canSave: true
+    }));
+    controller.actions.answerDiscard("save");
+    expect(await switching).toBe(true);
+    expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("0.5");
+    expect(repository.rows.get("q1")?.revision).toBe(2);
+    expect(controller.getSnapshot()).toMatchObject({ activePlanId: "q2", dirty: false, error: "", confirmation: null });
+  });
+
+  it("a failed save keeps the draft, does not switch, and names the field", async () => {
+    const { controller, repository } = workspace(new MemoryRepository(), async () => "save");
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "полставки");
+    expect(await controller.actions.selectPlan("q2")).toBe(false);
+    expect(repository.save).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ activePlanId: "q1", dirty: true });
+    expect(controller.getSnapshot().error).toBe("Не удалось сохранить. Сотрудник 1, ставка: введите число; дробную часть можно отделить запятой или точкой.");
+    expect(controller.getSnapshot().draft?.members[0].fte).toBe("полставки");
+
+    repository.save.mockRejectedValueOnce(new Error("Диск недоступен"));
+    changeFte(controller, "0.5");
+    expect(await controller.actions.closeProject()).toBe(false);
+    expect(controller.getSnapshot()).toMatchObject({ activePlanId: "q1", dirty: true, error: "Диск недоступен" });
+    expect(repository.close).not.toHaveBeenCalled();
+  });
+
+  it("saves decimals typed with a comma even when the field did not lose focus", async () => {
+    const { controller, repository } = workspace(new MemoryRepository(), async () => "save");
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    // The inputs replace "," with "." while typing and normalize on blur; the dialog takes focus first.
+    changeFte(controller, "0.50");
+    controller.actions.updateDraft((draft) => ({ ...draft, directions: [{ id: "product", name: "Продукт", percent: "100.0" }],
+      tasks: [{ id: "task", name: "Задача", directionId: "product", estimateHours: "1.0" }] }));
+    expect(await controller.actions.selectPlan("q2")).toBe(true);
+    const saved = repository.rows.get("q1")!.snapshot;
+    expect([saved.members[0].fte, saved.directions[0].percent, saved.tasks[0].estimateHours]).toEqual(["0.5", "100", "1"]);
+    expect(controller.getSnapshot()).toMatchObject({ activePlanId: "q2", notice: "Изменения квартала «1 квартал 2026 года» сохранены." });
+  });
+
+  it("shows the normalized values after saving and is not dirty", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, ",50");
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.rows.get("q1")?.snapshot.members[0].fte).toBe("0.5");
+    expect(controller.getSnapshot().draft?.members[0].fte).toBe("0.5");
+    expect(controller.getSnapshot().dirty).toBe(false);
+  });
+
+  it("the in-app dialog without saving cannot save, and a new project starts without the old notice", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    controller.actions.setPendingFormDirty(PROJECT_NAME_FORM, true);
+    const switching = controller.actions.selectPlan("q1");
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation?.canSave).toBe(false));
+    controller.actions.answerDiscard("save");
+    expect(await switching).toBe(false);
+    expect(repository.save).not.toHaveBeenCalled();
+    controller.actions.setPendingFormDirty(PROJECT_NAME_FORM, false);
+
+    changeFte(controller, "0.5");
+    const opening = controller.actions.openProject(folderB);
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation?.canSave).toBe(true));
+    controller.actions.answerDiscard("save");
+    expect(await opening).toBe(true);
+    expect(repository.save).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().notice).toBe("");
+  });
+
+  it("does not offer saving while the team name is being edited", async () => {
+    const confirm = vi.fn(async (_message: string, _canSave: boolean): Promise<DiscardAnswer> => "save");
+    const { controller, repository } = workspace(new MemoryRepository(), confirm);
+    await controller.actions.openProject(folderA);
+    controller.actions.setPendingFormDirty(PROJECT_NAME_FORM, true);
+    expect(await controller.actions.selectPlan("q1")).toBe(false);
+    expect(confirm).toHaveBeenCalledWith("Есть несохранённые изменения. Если продолжить, они будут потеряны.", false);
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+});
+
+describe("new quarter copied from a saved quarter", () => {
+  function teamPlan(planId: string, year: number, quarter: Quarter): StoredQuarterPlan {
+    const calendar = createQuarterCalendar(year, quarter);
+    if (!calendar.ok) throw new Error(calendar.message);
+    return { planId, revision: 3, snapshot: {
+      year, quarter, calendar: calendar.calendar, calendarSource: calendar.calendarSource,
+      competencies: [{ id: "sa", name: "SA" }, { id: "java", name: "Java" }],
+      members: [{ id: "ivan", name: "Иван", competencyId: "sa", fte: "1" }, { id: "olga", name: "Ольга", competencyId: "java", fte: "0.5" }],
+      absences: [{ id: "vacation", memberId: "ivan", startDate: `${year}-${String(quarter * 3 - 1).padStart(2, "0")}-02`, endDate: `${year}-${String(quarter * 3 - 1).padStart(2, "0")}-06` }],
+      directions: [{ id: "product", name: "Продукт", percent: "70" }, { id: "meetings", name: "Встречи", percent: "30" }],
+      tasks: [{ id: "task", name: "Онбординг", directionId: "product", estimateHours: "40" }]
+    } };
+  }
+
+  it("copies team, FTE, competencies and shares; absences, tasks and calendar are new", async () => {
+    const { controller, repository } = workspace(new MemoryRepository([teamPlan("q4", 2026, 4)]));
+    await controller.actions.openProject(folderA);
+    expect(await controller.actions.createPlan(2027, 1, "ru-official", "q4")).toBe(true);
+    const created = [...repository.rows.values()].find((plan) => plan.snapshot.year === 2027);
+    const source = repository.rows.get("q4")!.snapshot;
+    const calendar = createQuarterCalendar(2027, 1);
+    if (!calendar.ok) throw new Error(calendar.message);
+    expect(created?.snapshot).toEqual({
+      year: 2027, quarter: 1, calendar: calendar.calendar, calendarSource: calendar.calendarSource,
+      competencies: source.competencies, members: source.members, directions: source.directions, absences: [], tasks: []
+    });
+    expect(repository.rows.get("q4")).toEqual(teamPlan("q4", 2026, 4));
+    expect(controller.getSnapshot()).toMatchObject({ activePlanId: created?.planId, dirty: false });
+    expect(controller.getSnapshot().notice).toContain("скопированы сотрудники");
+  });
+
+  it("copies the saved version, not unsaved edits that were discarded", async () => {
+    const { controller, repository } = workspace(new MemoryRepository([teamPlan("q4", 2026, 4)]), async () => true);
+    await controller.actions.openProject(folderA);
+    changeFte(controller, "0.25");
+    expect(await controller.actions.createPlan(2027, 1, "ru-official", "q4")).toBe(true);
+    const created = [...repository.rows.values()].find((plan) => plan.snapshot.year === 2027);
+    expect(created?.snapshot.members.map((member) => member.fte)).toEqual(["1", "0.5"]);
+  });
+
+  it("copies edits saved from the dialog", async () => {
+    const { controller, repository } = workspace(new MemoryRepository([teamPlan("q4", 2026, 4)]), async () => "save");
+    await controller.actions.openProject(folderA);
+    changeFte(controller, "0.25");
+    expect(await controller.actions.createPlan(2027, 1, "ru-official", "q4")).toBe(true);
+    const created = [...repository.rows.values()].find((plan) => plan.snapshot.year === 2027);
+    expect(created?.snapshot.members.map((member) => member.fte)).toEqual(["0.25", "0.25"]);
+    expect(repository.rows.get("q4")?.snapshot.members[0].fte).toBe("0.25");
+  });
+
+  it("without a source starts as before; an unknown source creates nothing", async () => {
+    const { controller, repository } = workspace(new MemoryRepository([teamPlan("q4", 2026, 4)]));
+    await controller.actions.openProject(folderA);
+    expect(await controller.actions.createPlan(2027, 2, "ru-official", "missing")).toBe(false);
+    expect(controller.getSnapshot().error).toBe("Квартал для копирования не найден.");
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(await controller.actions.createPlan(2027, 2, "ru-official", null)).toBe(true);
+    const created = [...repository.rows.values()].find((plan) => plan.snapshot.year === 2027);
+    expect(created?.snapshot).toMatchObject({ members: [], directions: [], absences: [], tasks: [] });
+    expect(created?.snapshot.competencies.map((competency) => competency.name)).toEqual(["SA", "BPMN", "Frontend", "Java", "Python", "QA"]);
   });
 });
 

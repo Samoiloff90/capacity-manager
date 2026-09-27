@@ -1,6 +1,8 @@
 import { createProject, openProject, type ProjectSession, type StoredQuarterPlan } from "../db/project-snapshots";
 import type { Quarter } from "../domain/capacity/calendar-quarter";
 import { createQuarterCalendar, type CalendarMode } from "../domain/capacity/project-calendar";
+import { normalizeSnapshotDecimals } from "../domain/capacity/draft-normalize";
+import { copyQuarterSetup } from "../domain/capacity/quarter-copy";
 import { calculateQuarterCapacity } from "../domain/capacity/quarter-capacity.calculator";
 import type { CalculateQuarterCapacityResult, QuarterSnapshot } from "../domain/capacity/quarter-capacity.types";
 import { validateQuarterSnapshot } from "../domain/capacity/quarter-snapshot.validation";
@@ -8,9 +10,17 @@ import { buildQuarterReport, type QuarterReport } from "../export/quarter-report
 import { saveReportFile, type ReportSaveOutcome } from "../export/report-file";
 import { renderQuarterReportXlsx } from "../export/xlsx";
 import { pickProjectFolder } from "./folder-picker";
+import { describeValidationIssue } from "./validation-text";
 
 /** Pending-form key of the team rename form; it blocks saving and the report. */
 export const PROJECT_NAME_FORM = "project-name";
+
+/** Answer to the unsaved-changes dialog: true discards, false cancels, "save" saves first. */
+export type DiscardAnswer = boolean | "save";
+
+export function quarterTitle(period: { year: number; quarter: Quarter }): string {
+  return `${period.quarter} квартал ${period.year} года`;
+}
 
 export interface WorkspaceRepository {
   readonly session: Readonly<ProjectSession>;
@@ -32,7 +42,8 @@ export interface WorkspaceState {
   error: string;
   notice: string;
   calculation: CalculateQuarterCapacityResult | null;
-  confirmation: { message: string } | null;
+  /** canSave: the dialog may offer "Сохранить и продолжить". */
+  confirmation: { message: string; canSave: boolean } | null;
   /** Whether the saved quarter can be exported; hint explains why not. */
   report: { available: boolean; hint: string };
 }
@@ -46,7 +57,7 @@ interface Dependencies {
   now: () => Date;
   renderReport: (report: QuarterReport) => Promise<Uint8Array>;
   saveReportFile: (defaultName: string, bytes: Uint8Array) => Promise<ReportSaveOutcome>;
-  confirmDiscard?: (message: string) => Promise<boolean>;
+  confirmDiscard?: (message: string, canSave: boolean) => Promise<DiscardAnswer>;
   readSelectedPlan?: (projectId: string) => string | null;
   writeSelectedPlan?: (projectId: string, planId: string) => void;
 }
@@ -75,7 +86,7 @@ export class ProjectWorkspaceController {
   private repository: WorkspaceRepository | null = null;
   private operation: Promise<boolean> | null = null;
   private operationKind: "save" | "transition" | "export" | null = null;
-  private resolveDiscard: ((discard: boolean) => void) | null = null;
+  private resolveDiscard: ((answer: DiscardAnswer) => void) | null = null;
   // Set while closeProject waits for a running operation: a folder picked meanwhile is not opened.
   private closeRequested = false;
   // Keyed by the stored plan object: list/save always replace it with a new one.
@@ -136,14 +147,46 @@ export class ProjectWorkspaceController {
     return pending;
   }
 
+  /** Runs inside the calling operation; a failed save throws, so the transition does not happen. */
   private async canDiscard(): Promise<boolean> {
     if (!this.state.dirty) return true;
-    const message = "Есть несохранённые изменения. Если продолжить, они будут потеряны.";
-    if (this.deps.confirmDiscard) return this.deps.confirmDiscard(message);
-    return new Promise<boolean>((resolve) => {
-      this.resolveDiscard = resolve;
-      this.publish({ confirmation: { message } });
-    });
+    const saved = this.state.plans.find((plan) => plan.planId === this.state.activePlanId);
+    // An unfinished team rename is not part of the quarter and cannot be saved from here.
+    const canSave = Boolean(this.repository && this.state.draft && saved && this.pendingForms.size === 0);
+    const message = canSave && saved
+      ? `В квартале «${quarterTitle(saved.snapshot)}» есть несохранённые изменения. Сохранить их перед продолжением?`
+      : "Есть несохранённые изменения. Если продолжить, они будут потеряны.";
+    const answer = this.deps.confirmDiscard
+      ? await this.deps.confirmDiscard(message, canSave)
+      : await new Promise<DiscardAnswer>((resolve) => {
+        this.resolveDiscard = resolve;
+        this.publish({ confirmation: { message, canSave } });
+      });
+    if (answer !== "save") return answer;
+    if (!canSave) return false;
+    await this.persistDraft();
+    // Named, because the next screen may be another quarter or project.
+    if (saved) this.publish({ notice: `Изменения квартала «${quarterTitle(saved.snapshot)}» сохранены.` });
+    return true;
+  }
+
+  private async persistDraft(): Promise<void> {
+    const { draft, activePlanId } = this.state;
+    const saved = this.state.plans.find((plan) => plan.planId === activePlanId);
+    if (!this.repository || !draft || !saved) throw new Error("Сначала выберите квартал.");
+    if (this.pendingForms.size) throw new Error("Сначала завершите редактирование названия команды.");
+    const captured = normalizeSnapshotDecimals(clone(draft));
+    const checked = validateQuarterSnapshot(captured);
+    if (!checked.ok) {
+      const first = checked.errors[0];
+      throw new Error(`Не удалось сохранить. ${first ? describeValidationIssue(first) : "Проверьте введённые данные."}`);
+    }
+    if (captured.year !== saved.snapshot.year || captured.quarter !== saved.snapshot.quarter) throw new Error("Период существующего плана нельзя изменить.");
+    const stored = clone(await this.repository.save(saved.planId, saved.revision, captured));
+    // Show the normalized values unless the draft was edited while saving.
+    const normalized = this.state.draft === draft ? { draft: clone(captured), calculation: calculateQuarterCapacity(captured) } : {};
+    this.publish({ plans: this.state.plans.map((plan) => plan.planId === stored.planId ? stored : plan), ...normalized });
+    this.publish({ notice: this.state.dirty ? "Расчёт сохранён. Более поздние изменения ещё не сохранены." : "Расчёт сохранён в папке проекта." });
   }
 
   private select(plan: StoredQuarterPlan | undefined) {
@@ -179,7 +222,7 @@ export class ProjectWorkspaceController {
       await this.repository?.close({ discardFailedWrites: true });
       this.repository = candidate;
       this.pendingForms.clear();
-      this.publish({ project: clone(candidate.session), plans });
+      this.publish({ project: clone(candidate.session), plans, notice: "" });
       let preference: string | null = null;
       try { preference = this.deps.readSelectedPlan?.(candidate.session.projectId) ?? null; }
       catch { /* Optional application-local preference. */ }
@@ -236,7 +279,9 @@ export class ProjectWorkspaceController {
       this.select(plan);
       return true;
     }),
-    createPlan: (year: number, quarter: Quarter, mode: CalendarMode = "ru-official"): Promise<boolean> => this.run("transition", async () => {
+    /** copyFromPlanId copies the saved team and shares of that quarter; see copyQuarterSetup. */
+    createPlan: (year: number, quarter: Quarter, mode: CalendarMode = "ru-official",
+      copyFromPlanId: string | null = null): Promise<boolean> => this.run("transition", async () => {
       if (!this.repository) throw new Error("Сначала откройте проект.");
       const existing = this.state.plans.find((plan) => plan.snapshot.year === year && plan.snapshot.quarter === quarter);
       if (existing?.planId === this.state.activePlanId) return true;
@@ -248,29 +293,25 @@ export class ProjectWorkspaceController {
       const calendar = createQuarterCalendar(year, quarter, mode);
       if (!calendar.ok) throw new Error(calendar.message);
       if (!await this.canDiscard()) return false;
-      const snapshot: QuarterSnapshot = {
-        year, quarter, calendar: calendar.calendar, calendarSource: calendar.calendarSource,
+      // Looked up after the dialog: "Сохранить и продолжить" may have just saved the source.
+      const source = copyFromPlanId === null ? undefined : this.state.plans.find((plan) => plan.planId === copyFromPlanId);
+      if (copyFromPlanId !== null && !source) throw new Error("Квартал для копирования не найден.");
+      const base = { year, quarter, calendar: calendar.calendar, calendarSource: calendar.calendarSource };
+      const snapshot: QuarterSnapshot = source ? copyQuarterSetup(source.snapshot, base) : {
+        ...base,
         competencies: ["SA", "BPMN", "Frontend", "Java", "Python", "QA"].map((name) => ({ id: this.deps.id(), name })),
         members: [], absences: [], directions: [], tasks: []
       };
       const stored = clone(await this.repository.create(this.deps.id(), snapshot));
       this.publish({ plans: [...this.state.plans, stored] });
       this.select(stored);
-      this.publish({ notice: "Квартал создан. Заполните команду и сохраните расчёт." });
+      this.publish({ notice: source
+        ? `Квартал создан. Из квартала «${quarterTitle(source.snapshot)}» скопированы сотрудники, ставки, компетенции и направления; добавьте отсутствия и задачи.`
+        : "Квартал создан. Заполните команду и сохраните расчёт." });
       return true;
     }),
     save: (): Promise<boolean> => this.run("save", async () => {
-      const { draft, activePlanId } = this.state;
-      const saved = this.state.plans.find((plan) => plan.planId === activePlanId);
-      if (!this.repository || !draft || !saved) throw new Error("Сначала выберите квартал.");
-      if (this.pendingForms.size) throw new Error("Сначала завершите редактирование названия команды.");
-      const captured = clone(draft);
-      const checked = validateQuarterSnapshot(captured);
-      if (!checked.ok) throw new Error(`Не удалось сохранить: ${checked.errors[0]?.message ?? "проверьте введённые данные"}`);
-      if (captured.year !== saved.snapshot.year || captured.quarter !== saved.snapshot.quarter) throw new Error("Период существующего плана нельзя изменить.");
-      const stored = clone(await this.repository.save(saved.planId, saved.revision, captured));
-      this.publish({ plans: this.state.plans.map((plan) => plan.planId === stored.planId ? stored : plan) });
-      this.publish({ notice: this.state.dirty ? "Расчёт сохранён. Более поздние изменения ещё не сохранены." : "Расчёт сохранён в папке проекта." });
+      await this.persistDraft();
       return true;
     }),
     /** Exports the saved quarter; the native command shows "Save as". Cancelling is not an error. */
@@ -311,11 +352,11 @@ export class ProjectWorkspaceController {
       if (dirty) this.pendingForms.add(key); else this.pendingForms.delete(key);
       this.publish({});
     },
-    answerDiscard: (discard: boolean): void => {
+    answerDiscard: (answer: DiscardAnswer): void => {
       const resolve = this.resolveDiscard;
       this.resolveDiscard = null;
       this.publish({ confirmation: null });
-      resolve?.(discard);
+      resolve?.(answer);
     },
     clearMessage: (): void => this.publish({ error: "", notice: "" }),
     setCloseProtectionReady: (ready: boolean): void => this.publish({ closeProtectionReady: ready }),
