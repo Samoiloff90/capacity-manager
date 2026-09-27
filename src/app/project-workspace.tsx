@@ -41,6 +41,27 @@ export function ProjectWorkspaceProvider({ children }: PropsWithChildren) {
     });
     return () => { disposed = true; unlisten?.(); };
   }, [controller]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    // Reloading the page would drop the draft without the unsaved-changes dialog while the
+    // native session keeps the project locked, so browser reload shortcuts are disabled.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && event.code === "KeyR")) event.preventDefault();
+    };
+    // The page menu offers "Reload", also over selects, checkboxes and date fields.
+    // Only text fields keep their menu for cut, copy and paste.
+    const onMenu = (event: MouseEvent) => {
+      const editable = event.target instanceof Element
+        && event.target.closest("input:not([type]), input[type='text'], input[type='search'], textarea, [contenteditable='true']");
+      if (!editable) event.preventDefault();
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("contextmenu", onMenu);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("contextmenu", onMenu);
+    };
+  }, []);
   return <Context.Provider value={controller}>{children}</Context.Provider>;
 }
 
