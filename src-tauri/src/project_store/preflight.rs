@@ -51,7 +51,7 @@ pub(super) fn header(path: &Path) -> StoreResult<()> {
     let version = u32::from_be_bytes(bytes[60..64].try_into().unwrap()) as i64;
     if &bytes[..16] != b"SQLite format 3\0" || id != schema::APPLICATION_ID {
         return Err(StoreError::InvalidProject(
-            "Файл не является проектом Capacity Manager".into(),
+            "Файл не является проектом Capacity Planner".into(),
         ));
     }
     if version != schema::SCHEMA_VERSION {

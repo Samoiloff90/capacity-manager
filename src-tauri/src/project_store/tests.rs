@@ -256,6 +256,90 @@ fn create_refuses_nonempty_folder_without_changes() {
 }
 
 #[test]
+fn create_accepts_folder_with_only_os_metadata_and_leaves_it_unchanged() {
+    run(async {
+        let folder = fixture();
+        fs::write(folder.path().join(".DS_Store"), b"finder").unwrap();
+        fs::write(folder.path().join("desktop.ini"), b"[.ShellClassInfo]").unwrap();
+        let store = ProjectStore::new();
+        let instances = DbInstances::default();
+        let session = store
+            .create(&instances, folder.path().to_owned(), "Команда".into())
+            .await
+            .unwrap();
+        store.close(&instances, &session.session_key).await.unwrap();
+        let after = contents(folder.path());
+        assert_eq!(
+            after.get(".DS_Store").map(Vec::as_slice),
+            Some(&b"finder"[..])
+        );
+        assert_eq!(
+            after.get("desktop.ini").map(Vec::as_slice),
+            Some(&b"[.ShellClassInfo]"[..])
+        );
+        assert!(after.contains_key(DATABASE_NAME));
+    });
+}
+
+#[test]
+fn create_refuses_os_metadata_next_to_another_file_and_ignores_case() {
+    run(async {
+        let folder = fixture();
+        fs::write(folder.path().join("THUMBS.DB"), b"cache").unwrap();
+        fs::write(folder.path().join(".localized"), b"").unwrap();
+        fs::write(folder.path().join("план.txt"), b"keep").unwrap();
+        let before = contents(folder.path());
+        assert!(ProjectStore::new()
+            .create(
+                &DbInstances::default(),
+                folder.path().to_owned(),
+                "new".into()
+            )
+            .await
+            .is_err());
+        assert_eq!(before, contents(folder.path()));
+        assert!(ignorable_in_empty_folder(std::ffi::OsStr::new(
+            "Desktop.ini"
+        )));
+        assert!(!ignorable_in_empty_folder(std::ffi::OsStr::new(
+            ".CAPACITY.LOCK"
+        )));
+    });
+}
+
+#[test]
+fn open_folder_with_only_a_stale_lock_says_there_is_no_project() {
+    run(async {
+        let folder = fixture();
+        fs::write(folder.path().join(".capacity.lock"), b"").unwrap();
+        let before = contents(folder.path());
+        let error = ProjectStore::new()
+            .open(&DbInstances::default(), folder.path().to_owned())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("нет проекта Capacity Planner"), "{error}");
+        assert_eq!(before, contents(folder.path()));
+    });
+}
+
+#[test]
+fn open_folder_without_project_explains_it_in_russian_and_changes_nothing() {
+    run(async {
+        let folder = fixture();
+        fs::write(folder.path().join("заметки.txt"), b"keep").unwrap();
+        let before = contents(folder.path());
+        let error = ProjectStore::new()
+            .open(&DbInstances::default(), folder.path().to_owned())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("нет проекта Capacity Planner"), "{error}");
+        assert_eq!(before, contents(folder.path()));
+    });
+}
+
+#[test]
 fn close_waits_pending_connection_and_only_closes_its_project() {
     run(async {
         let (a, store, instances, session) = new_project().await;

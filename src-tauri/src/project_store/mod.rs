@@ -222,6 +222,18 @@ fn start_open(
     Ok(receiver)
 }
 
+/// Our lock file and files the OS adds to folders it shows: Finder writes .DS_Store into a
+/// folder that looks empty. They stay untouched; any other file means the folder is not empty.
+fn ignorable_in_empty_folder(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    name == ".capacity.lock"
+        || [".DS_Store", ".localized", "desktop.ini", "Thumbs.db"]
+            .iter()
+            .any(|ignored| name.eq_ignore_ascii_case(ignored))
+}
+
 /// Create a complete closed database before publishing it. Publication uses a
 /// same-filesystem hard link (no overwrite); failures remove only our UUID stage.
 async fn prepare_create(
@@ -289,7 +301,7 @@ impl ProjectStore {
         let directory = preflight::folder(&folder_path)?;
         if fs::read_dir(&directory)?.any(|entry| {
             entry
-                .map(|e| e.file_name() != ".capacity.lock")
+                .map(|e| !ignorable_in_empty_folder(&e.file_name()))
                 .unwrap_or(true)
         }) {
             return Err(StoreError::InvalidProject(
@@ -360,6 +372,12 @@ impl ProjectStore {
     ) -> StoreResult<ProjectSession> {
         let directory = preflight::folder(&folder_path)?;
         let path = directory.join(DATABASE_NAME);
+        if matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Err(StoreError::InvalidProject(format!(
+                "В этой папке нет проекта Capacity Planner (файла {DATABASE_NAME}). Выберите папку проекта или создайте новый проект"
+            )));
+        }
         // A pre-existing lock can be acquired without creating/changing files.
         // This prevents immutable reads racing an active cooperating writer.
         let existing_ownership = preflight::Ownership::acquire_existing(&directory)?;
