@@ -80,7 +80,8 @@ async function input(selector, value) {
 }
 const text = () => evaluate("document.body.innerText");
 const exportButton = () => evaluate(`(() => { const b = ${buttonExpression("Выгрузить отчёт")};
-  return b ? { disabled: b.disabled, title: b.title, hint: b.parentElement.querySelector('.project-muted')?.textContent ?? '' } : null; })()`);
+  return b ? { disabled: b.disabled, title: b.title, hint: document.querySelector('.project-report-hint')?.textContent ?? '' } : null; })()`);
+const activeQuarter = "document.querySelector('.project-plan-select select')?.selectedOptions[0]?.textContent === '4 квартал 2026 года'";
 
 // Managed UI Automation sees the Common Item Dialog only as panes without patterns,
 // so the dialog is driven with classic Win32 messages to its child controls.
@@ -180,7 +181,7 @@ async function reopenProject() {
   await waitFor("Boolean(document.querySelector('.project-welcome'))");
   await evaluate(`window.__smokeFolder = ${JSON.stringify(projectFolder)}`);
   await click("Открыть папку проекта");
-  await waitFor("document.querySelector('.project-section-heading h2')?.textContent === '4 квартал 2026 года'");
+  await waitFor(activeQuarter, "reopened Q4");
 }
 
 async function replaceQuarter(update) {
@@ -231,10 +232,12 @@ try {
   await evaluate(`window.__smokeFolder = ${JSON.stringify(projectFolder)}`);
   await input(".project-welcome input", marked("Тестовая команда: отчёт/Q4"));
   await click("Выбрать папку и создать");
-  await input(".project-year input", "2026");
-  await input(".project-period-bar form select", "4");
+  await click("Новый квартал…");
+  await waitFor("Boolean(document.querySelector('.project-new-quarter'))", "new quarter dialog");
+  await input(".project-new-quarter .project-year input", "2026");
+  await input(".project-new-quarter select", "4");
   await click("Создать квартал");
-  await waitFor("document.querySelector('.project-section-heading h2')?.textContent === '4 квартал 2026 года'");
+  await waitFor(activeQuarter, "created Q4");
 
   // README scenario written as a saved quarter, then reopened like a real project.
   await replaceQuarter((snapshot) => ({
@@ -249,13 +252,13 @@ try {
     ]
   }));
   await reopenProject();
-  await waitFor("document.querySelector('.project-summary-card strong')?.textContent === '252,00 ч'", "252 h");
+  await waitFor("document.querySelector('.project-total-available strong')?.textContent === '252 ч'", "252 h");
   results.availableWhenSaved = await exportButton();
   assert.deepEqual(results.availableWhenSaved, { disabled: false, title: "Сохранить отчёт по сохранённому кварталу в файл Excel", hint: "" });
 
   await input('[aria-label="Ставка сотрудника 1"]', "0,75");
   results.whenDirty = await exportButton();
-  assert.deepEqual(results.whenDirty, { disabled: true, title: "Сохраните квартал", hint: "Сохраните квартал" });
+  assert.deepEqual(results.whenDirty, { disabled: true, title: "Сохраните квартал", hint: "Отчёт: сохраните квартал" });
   await input('[aria-label="Ставка сотрудника 1"]', "0,5");
   await waitFor(`!${buttonExpression("Выгрузить отчёт")}.disabled`, "export enabled after reverting the draft");
 

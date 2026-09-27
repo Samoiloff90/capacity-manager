@@ -104,7 +104,7 @@ async function expectDirection(name, expected) {
     const row = Array.from(document.querySelectorAll('table.project-direction-summary tbody tr'))
       .find(row => row.cells[0]?.textContent.trim() === ${JSON.stringify(name)});
     if (!row) return false;
-    const text = selector => row.querySelector(selector)?.textContent.trim();
+    const text = selector => row.querySelector(selector)?.textContent.trim() ?? null;
     const actual = {
       budget: text('.project-direction-budget'),
       demandLabel: text('.project-direction-demand .project-balance-label'),
@@ -136,6 +136,12 @@ async function readQuarter(planId) {
   assert.equal(rows.length, 1, "Exactly one saved quarter");
   return { snapshot: JSON.parse(rows[0].payload_json), revision: rows[0].revision };
 }
+async function pressKey(key, code, keyCode, modifiers = 0) {
+  for (const type of ["rawKeyDown", "keyUp"]) {
+    await cdp("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers });
+  }
+  await sleep(60);
+}
 async function saveQuarter() {
   await click("Сохранить квартал");
   await waitFor("document.querySelector('.project-status')?.textContent === 'Все изменения сохранены'");
@@ -149,14 +155,25 @@ async function capturePage(filename) {
 }
 async function folder(value) { await evaluate(`window.__smokeFolder = ${JSON.stringify(value)}`); }
 async function expectHours(text) {
-  const expected = text.replace(/^(\d+) ч$/, "$1,00 ч");
-  await waitFor(`document.querySelector('.project-summary-card strong')?.textContent === ${JSON.stringify(expected)}`, `capacity ${expected}`);
+  await waitFor(`document.querySelector('.project-total-available strong')?.textContent === ${JSON.stringify(text)}`, `capacity ${text}`);
 }
-async function createQuarter(quarter) {
-  await input(".project-year input", "2026");
-  await input(".project-period-bar form select", String(quarter));
+async function expectActiveQuarter(title) {
+  await waitFor(`document.querySelector('.project-plan-select select')?.selectedOptions[0]?.textContent === ${JSON.stringify(title)}`, `active ${title}`);
+}
+/** copyFrom: the visible name of the source quarter, or "Не копировать". */
+async function openNewQuarter(year, quarter, copyFrom) {
+  await click("Новый квартал…");
+  await input(".project-new-quarter .project-year input", String(year));
+  await input(".project-new-quarter select", String(quarter));
+  if (copyFrom === undefined) return;
+  // Without saved quarters there is nothing to copy and the list stays disabled.
+  if (await evaluate("document.querySelector('.project-new-quarter .project-copy-source').disabled")) assert.equal(copyFrom, "Не копировать");
+  else await selectOption(".project-new-quarter .project-copy-source", copyFrom);
+}
+async function createQuarter(quarter, year = 2026, copyFrom = "Не копировать") {
+  await openNewQuarter(year, quarter, copyFrom);
   await click("Создать квартал");
-  await waitFor(`document.querySelector('.project-section-heading h2')?.textContent === '${quarter} квартал 2026 года'`);
+  await expectActiveQuarter(`${quarter} квартал ${year} года`);
 }
 
 try {
@@ -209,7 +226,12 @@ try {
   await input(aria("Последний день отсутствия 1"), "2026-10-02");
   await expectHours("248 ч");
   await click("Календарь");
-  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.project-calendar-month h3'), e => e.textContent)"), ["октябрь", "ноябрь", "декабрь"]);
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.project-calendar-month .project-month-name'), e => e.textContent)"), ["октябрь", "ноябрь", "декабрь"]);
+  // Two-week sprints from the first Monday (5 October), counted in the month they end.
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.project-calendar-month .project-month-sprints'), e => e.textContent.trim())"),
+    ["· 1 спринт", "· 3 спринта", "· 2 спринта"]);
+  assert.equal(await evaluate("document.querySelectorAll('.project-sprint-table tbody tr').length"), 6);
+  assert.match(await evaluate("document.querySelector('.project-period-facts').textContent"), /^Календарь РФ 2026 · 64 рабочих дня · 6 спринтов/);
   await evaluate(`document.querySelector(${JSON.stringify(aria("Рабочий день 2026-10-03"))}).click()`);
   await expectHours("252 ч");
   await click("Распределение");
@@ -219,7 +241,7 @@ try {
   await click("Добавить направление");
   await input(aria("Название направления 2"), "Встречи и резерв");
   await input(aria("Доля направления 2"), "80");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "0,00 ч", balanceLabel: "Остаток", balance: "50,40 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "0 ч", balanceLabel: null, balance: "50,40 ч" });
   const q4 = await evaluate("document.querySelector('.project-plan-select select').value");
   await click("Задачи");
   await click("Добавить задачу");
@@ -230,8 +252,9 @@ try {
   await input(aria("Название задачи 2"), "Разработка продукта");
   await selectOption(aria("Направление задачи 2"), "Продукт");
   await input(aria("Оценка задачи 2"), "25");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "55,00 ч", balanceLabel: "Дефицит", balance: "4,60 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: "Потребность", demand: "0,00 ч", balanceLabel: "Остаток", balance: "201,60 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "55 ч", balanceLabel: null, balance: "−4,60 ч" });
+  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "0 ч", balanceLabel: null, balance: "201,60 ч" });
+  await waitFor("document.querySelector('.project-total-remaining .project-chip.deficit')?.textContent === 'Дефицит в 1 направлении'", "deficit chip");
   await capturePage("tasks-deficit.png");
 
   // Missing is a persisted null, never an implicit zero or a complete demand.
@@ -239,14 +262,14 @@ try {
   await input(aria("Название задачи 3"), "Уточнение объёма");
   await selectOption(aria("Направление задачи 3"), "Продукт");
   assert.equal((await taskRows())[2].estimate, "");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Известная потребность", demand: "55,00 ч", balanceLabel: "Дефицит не менее", balance: "4,60 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Известная потребность", demand: "55 ч", balanceLabel: "Дефицит не менее", balance: "4,60 ч" });
   await saveQuarter();
   const tasksWithMissing = (await readQuarter(q4)).snapshot.tasks;
   const missingTask = tasksWithMissing.find((task) => task.name === "Уточнение объёма");
   assert(missingTask, "The unestimated task is persisted");
   assert.equal(missingTask.estimateHours, null);
   await input(aria("Оценка задачи 3"), "0");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "55,00 ч", balanceLabel: "Дефицит", balance: "4,60 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "55 ч", balanceLabel: null, balance: "−4,60 ч" });
   await saveQuarter();
   assert.equal((await readQuarter(q4)).snapshot.tasks.find((task) => task.id === missingTask.id)?.estimateHours, "0");
 
@@ -254,12 +277,12 @@ try {
   await input(aria("Название задачи 2"), "Реализация задачи");
   const reserveId = await selectOption(aria("Направление задачи 2"), "Встречи и резерв");
   await input(aria("Оценка задачи 2"), "25,0");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "30,00 ч", balanceLabel: "Остаток", balance: "20,40 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: "Потребность", demand: "25,00 ч", balanceLabel: "Остаток", balance: "176,60 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
+  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "25 ч", balanceLabel: null, balance: "176,60 ч" });
   await input(aria("Оценка задачи 1"), "30,5");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "30,50 ч", balanceLabel: "Остаток", balance: "19,90 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30,50 ч", balanceLabel: null, balance: "19,90 ч" });
   await input(aria("Оценка задачи 1"), "50,4001");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "50,40 ч", balanceLabel: "Дефицит", balance: "<0,01 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "50,40 ч", balanceLabel: null, balance: "Дефицит <0,01 ч" });
   await input(aria("Оценка задачи 1"), "30");
 
   // Cancellation retains the row; confirmation removes only its stable ID.
@@ -270,7 +293,7 @@ try {
   await clickSelector(aria("Удалить задачу Уточнение объёма"));
   await clickTaskDeletion("Подтвердить удаление задачи");
   await waitFor("document.querySelectorAll('[aria-label^=\"Название задачи \"]').length === 2");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "30,00 ч", balanceLabel: "Остаток", balance: "20,40 ч" });
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
   await saveQuarter();
   const savedTasksBeforeClose = (await readQuarter(q4)).snapshot.tasks;
   assert.equal(savedTasksBeforeClose.length, 2);
@@ -298,7 +321,8 @@ try {
   await expectHours("378 ч");
   await input(".project-plan-select select", q1);
   await waitFor("Boolean(document.querySelector('[role=alertdialog]'))");
-  await click("Вернуться");
+  assert.equal(await evaluate("document.querySelector('.project-status').textContent"), "Ожидает решения");
+  await click("Отмена");
   await expectHours("378 ч");
   await input(".project-plan-select select", q1);
   await click("Не сохранять");
@@ -306,11 +330,30 @@ try {
   await input(".project-plan-select select", q4);
   await expectHours("252 ч");
   // A year without a bundled calendar requires an explicit manual mode, then remains an independent plan.
-  await input(".project-year input", "2028");
+  await openNewQuarter(2028, 1, "Не копировать");
   assert(await evaluate("Array.from(document.querySelectorAll('button')).find(e => e.textContent === 'Создать квартал').disabled"));
-  await evaluate("document.querySelector('.project-confirmation input').click()");
+  await evaluate("document.querySelector('.project-new-quarter .project-confirmation input').click()");
   await click("Создать квартал");
+  await expectActiveQuarter("1 квартал 2028 года");
   await expectHours("0 ч");
+  // Copying: the nearest saved quarter before 2027 Q1 is offered; team, FTE and shares are copied,
+  // absences, tasks and the calendar are not.
+  await openNewQuarter(2027, 1);
+  assert.equal(await evaluate("document.querySelector('.project-copy-source').selectedOptions[0].textContent"), "4 квартал 2026 года");
+  await click("Создать квартал");
+  await expectActiveQuarter("1 квартал 2027 года");
+  await expectHours("224 ч");
+  const copiedId = await evaluate("document.querySelector('.project-plan-select select').value");
+  const copied = (await readQuarter(copiedId)).snapshot;
+  const source = (await readQuarter(q4)).snapshot;
+  assert.deepEqual(copied.members, source.members);
+  assert.deepEqual(copied.directions, source.directions);
+  assert.deepEqual(copied.competencies, source.competencies);
+  assert.deepEqual([copied.absences, copied.tasks], [[], []]);
+  assert.equal(copied.calendarSource.version, "ru-2027-tk112-pp1187-2026-09-17-v1");
+  await click("Распределение");
+  await expectDirection("Продукт", { budget: "44,80 ч", demand: "0 ч", balance: "44,80 ч" });
+  await click("Команда");
   await input(".project-plan-select select", q4);
   await expectHours("252 ч");
   await click("Закрыть проект");
@@ -336,14 +379,48 @@ try {
     { name: "Анализ продукта", directionId: productId, estimate: "30" },
     { name: "Реализация задачи", directionId: reserveId, estimate: "25" }
   ]);
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Потребность", demand: "30,00 ч", balanceLabel: "Остаток", balance: "20,40 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: "Потребность", demand: "25,00 ч", balanceLabel: "Остаток", balance: "176,60 ч" });
-  // Request the actual native X/close path with a dirty draft, then cancel it.
+  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
+  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "25 ч", balanceLabel: null, balance: "176,60 ч" });
+  // «Сохранить и продолжить» saves the draft before switching.
   await click("Команда");
+  await input(aria("Ставка сотрудника 1"), "0,75");
+  await input(".project-plan-select select", q1);
+  await click("Сохранить и продолжить");
+  await expectActiveQuarter("1 квартал 2026 года");
+  assert.equal((await readQuarter(q4)).snapshot.members[0].fte, "0.75");
+  await input(".project-plan-select select", q4);
+  await expectHours("378 ч");
+  // Ctrl+S while the field still has focus: its value is normalized before saving.
+  await evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(aria("Ставка сотрудника 1"))});
+    el.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '0,50');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  assert.equal(await evaluate("document.activeElement?.getAttribute('aria-label')"), "Ставка сотрудника 1");
+  await pressKey("s", "KeyS", 83, 2);
+  await waitFor("document.querySelector('.project-status')?.textContent === 'Все изменения сохранены'", "saved by Ctrl+S");
+  assert.equal((await readQuarter(q4)).snapshot.members[0].fte, "0.5");
+  await expectHours("252 ч");
+  // F5 and Ctrl+R must not reload the page: a reload would drop the draft and keep the project locked.
+  await evaluate("window.__smokeNoReload = true; window.__smokeReloadKeys = []; document.addEventListener('keydown', e => window.__smokeReloadKeys.push([e.key, e.defaultPrevented]))");
+  await pressKey("F5", "F5", 116);
+  await pressKey("r", "KeyR", 82, 2);
+  await sleep(500);
+  assert.equal(await evaluate("window.__smokeNoReload === true"), true, "The page was not reloaded");
+  assert.deepEqual(await evaluate("window.__smokeReloadKeys"), [["F5", true], ["r", true]]);
+  // Only text fields keep the native context menu; elsewhere it would offer «Обновить».
+  assert.deepEqual(await evaluate(`[".project-plan-select select", ${JSON.stringify(aria("Ставка сотрудника 1"))}, ".project-totals", "body"]
+    .map((selector) => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      document.querySelector(selector).dispatchEvent(event);
+      return event.defaultPrevented;
+    })`), [true, false, true, true]);
+  // Request the actual native X/close path with a dirty draft, then cancel it.
   await input(aria("Ставка сотрудника 1"), "0,75");
   await evaluate("window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'main' })");
   await waitFor("Boolean(document.querySelector('[role=alertdialog]'))");
-  await click("Вернуться");
+  await click("Отмена");
   await expectHours("378 ч");
   await input(aria("Ставка сотрудника 1"), "0,5");
   await expectHours("252 ч");
@@ -373,6 +450,19 @@ try {
   await capturePage("workflow.png");
   await click("Закрыть проект");
   await waitFor("Boolean(document.querySelector('.project-welcome'))");
+  // Control for the F5 check above: with preventDefault disabled, the same CDP key does reload
+  // the page. The project is closed by now, so the reload loses nothing.
+  await evaluate("window.__smokeReloadControl = true; KeyboardEvent.prototype.preventDefault = function () {}");
+  await pressKey("F5", "F5", 116);
+  const reloadDeadline = Date.now() + 12000;
+  let reloaded = false;
+  while (!reloaded && Date.now() < reloadDeadline) {
+    try { reloaded = await evaluate("window.__smokeReloadControl === undefined && document.readyState === 'complete'"); }
+    catch { /* The execution context is replaced during the reload. */ }
+    if (!reloaded) await sleep(100);
+  }
+  assert(reloaded, "Without the guard, F5 from CDP reloads the page");
+  await waitFor("Boolean(document.querySelector('.project-welcome'))", "welcome screen after the control reload");
   await evaluate("void (location.href = 'https://example.invalid/navigation-smoke')");
   await sleep(300);
   const afterNavigation = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
@@ -382,7 +472,9 @@ try {
     networkMode: emulateOffline ? "CDP renderer offline emulation; not an OS network block" : "normal",
     capacityHours: "252", productBudgetHours: "50.4", calendarVersion: snapshot.calendarSource.version,
     taskCount: snapshot.tasks.length, productDemandHours: "30", productRemainingHours: "20.4", reserveDemandHours: "25",
-    missingEstimateRoundTrip: true, explicitZeroRoundTrip: true, tinyDeficitDisplayed: true }, null, 2));
+    missingEstimateRoundTrip: true, explicitZeroRoundTrip: true, tinyDeficitDisplayed: true,
+    quarterCopied: true, savedFromDialog: true, ctrlSSaved: true, reloadKeysBlocked: true, reloadControlReloaded: true,
+    contextMenuLimitedToTextFields: true, sprintsShown: true }, null, 2));
   console.log(JSON.stringify({ passed: true, artifacts: root }));
 } catch (error) {
   await writeFile(resolve(root, "failure.txt"), `${error.stack}\n\n${await evaluate("document.body.innerText").catch(() => "No UI")}`);
