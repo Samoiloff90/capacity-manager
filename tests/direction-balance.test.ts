@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getQuarterDates } from "../src/domain/capacity/calendar-quarter";
-import { describeDirectionBalance } from "../src/domain/capacity/direction-balance";
+import { describeDirectionBalance, describeScreenBalanceCells } from "../src/domain/capacity/direction-balance";
+import { formatScreenHours } from "../src/domain/capacity/input-format";
 import { calculateQuarterCapacity } from "../src/domain/capacity/quarter-capacity.calculator";
 import type { QuarterCapacityResult, QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
 
@@ -124,5 +125,36 @@ describe("direction balance presentation from exact engine results", () => {
     const descriptions = Object.fromEntries(result.directions.map((direction) => [direction.directionId, describeDirectionBalance(direction)]));
     expect(descriptions.product).toMatchObject({ status: "deficit", balanceText: "3,00 ч", deficit: true });
     expect(descriptions.reserve).toMatchObject({ status: "balanced", balanceText: "0,00 ч", deficit: false });
+  });
+});
+
+describe("balance cells on screen", () => {
+  it("formats with the screen formatter while the default stays the report format", () => {
+    const direction = product({ tasks: [task("one", "21")] });
+    expect(describeDirectionBalance(direction)).toMatchObject({ balanceText: "1,00 ч", demandText: "21,00 ч" });
+    expect(describeDirectionBalance(direction, formatScreenHours)).toMatchObject({ balanceText: "1 ч", demandText: "21 ч" });
+  });
+
+  it.each([
+    ["10", { label: null, text: "10 ч" }],
+    ["20", { label: null, text: "0 ч" }],
+    ["24.6", { label: null, text: "−4,60 ч" }],
+    ["20.0000000000000001", { label: null, text: "Дефицит <0,01 ч" }]
+  ] as const)("shows a complete balance with estimate %s without a label, a deficit with a minus", (estimate, balance) => {
+    const cells = describeScreenBalanceCells(product({ tasks: [task("one", estimate)] }), formatScreenHours);
+    expect(cells.balance).toEqual(balance);
+    expect(cells.demand.label).toBeNull();
+  });
+
+  it("keeps the special labels: known demand, lower-bound deficit and preliminary balances", () => {
+    const missing = describeScreenBalanceCells(product({ tasks: [task("known", "30"), task("blank", null)] }), formatScreenHours);
+    expect(missing).toEqual({
+      demand: { label: "Известная потребность", text: "30 ч" },
+      balance: { label: "Дефицит не менее", text: "10 ч" }
+    });
+    const allocation = describeScreenBalanceCells(product({
+      directions: [{ id: "product", name: "Продукт", percent: "20" }], tasks: [task("one", "10")]
+    }), formatScreenHours);
+    expect(allocation.balance).toEqual({ label: "Предварительный остаток", text: "10 ч" });
   });
 });

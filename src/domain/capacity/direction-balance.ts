@@ -1,4 +1,4 @@
-import { formatDeficitHours, formatHours } from "./input-format";
+import { formatBalanceHours, formatDeficitHours, formatHours, type HoursFormatter } from "./input-format";
 import type { QuarterDirectionCapacity } from "./quarter-capacity.types";
 
 export type DirectionBalanceDescription = {
@@ -12,13 +12,16 @@ export type DirectionBalanceDescription = {
 };
 
 /** Presentation of a validated engine result; display rounding never decides its status. */
-export function describeDirectionBalance(direction: QuarterDirectionCapacity): DirectionBalanceDescription {
+export function describeDirectionBalance(
+  direction: QuarterDirectionCapacity,
+  format: HoursFormatter = formatHours
+): DirectionBalanceDescription {
   const deficit = direction.overrunKnownHours !== "0";
   const demandLabel = direction.demandComplete ? "Потребность" : "Известная потребность";
-  const demandText = formatHours(direction.knownDemandHours);
+  const demandText = format(direction.knownDemandHours);
   const balanceText = deficit
-    ? formatDeficitHours(direction.overrunKnownHours)
-    : formatHours(direction.remainingKnownHours);
+    ? formatDeficitHours(direction.overrunKnownHours, format)
+    : format(direction.remainingKnownHours);
   const missingNote = direction.demandComplete ? ""
     : `Задач без оценки: ${direction.missingEstimateCount}. Потребность неполная.`;
 
@@ -41,5 +44,27 @@ export function describeDirectionBalance(direction: QuarterDirectionCapacity): D
     status: deficit ? "deficit" : balanced ? "balanced" : "surplus",
     balanceLabel: deficit ? "Дефицит" : balanced ? "Баланс" : "Остаток",
     balanceText, demandLabel, demandText, note: "", deficit
+  };
+}
+
+export type BalanceCell = { label: string | null; text: string };
+
+/**
+ * On screen the status column already names ordinary results, so only special labels stay
+ * above the number. Without a label a deficit is shown with a minus sign: "−35,20 ч".
+ */
+export function describeScreenBalanceCells(
+  direction: QuarterDirectionCapacity,
+  format: HoursFormatter
+): { demand: BalanceCell; balance: BalanceCell } {
+  const description = describeDirectionBalance(direction, format);
+  const plainBalance = description.status !== "preliminary";
+  return {
+    demand: { label: direction.demandComplete ? null : description.demandLabel, text: description.demandText },
+    balance: plainBalance
+      ? { label: null, text: description.deficit
+        ? formatBalanceHours(`-${direction.overrunKnownHours}`, format)
+        : description.balanceText }
+      : { label: description.balanceLabel, text: description.balanceText }
   };
 }

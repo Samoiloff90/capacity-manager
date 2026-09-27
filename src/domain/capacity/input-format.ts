@@ -40,19 +40,33 @@ export function formatHours(value: string): string {
   return `${negative ? "−" : ""}${whole},${fraction.padEnd(2, "0")} ч`;
 }
 
+/** Thousands separator on screen; a no-break space keeps a number on one line. */
+export const HOURS_GROUP_SEPARATOR = "\u00a0";
+
+/** Display only, on screen: "2 248 ч", "4,60 ч". The report keeps formatHours. */
+export function formatScreenHours(value: string): string {
+  const rounded = roundDecimal(value, 2);
+  const negative = rounded.startsWith("-");
+  const [whole, fraction = ""] = (negative ? rounded.slice(1) : rounded).split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+$)/g, HOURS_GROUP_SEPARATOR);
+  return `${negative ? "−" : ""}${grouped}${fraction ? `,${fraction.padEnd(2, "0")}` : ""} ч`;
+}
+
+export type HoursFormatter = (value: string) => string;
+
 /** A strictly positive deficit must never become a displayed zero after rounding. */
-export function formatDeficitHours(value: string): string {
+export function formatDeficitHours(value: string, format: HoursFormatter = formatHours): string {
   const { negative, magnitude } = decimalParts(value);
   if (negative) throw new Error("Превышение бюджета не может быть отрицательным");
   if (isTinyNonzero(magnitude)) return "<0,01 ч";
-  return formatHours(value);
+  return format(value);
 }
 
 /** Signed balance with a separate, readable indication for a sub-cent deficit. */
-export function formatBalanceHours(value: string): string {
+export function formatBalanceHours(value: string, format: HoursFormatter = formatHours): string {
   const { negative, magnitude } = decimalParts(value);
   if (negative && isTinyNonzero(magnitude)) return "Дефицит <0,01 ч";
-  return formatHours(value);
+  return format(value);
 }
 
 function isTinyNonzero(value: string): boolean {

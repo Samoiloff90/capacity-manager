@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_DECIMAL_INPUT_CHARACTERS } from "../src/domain/capacity/decimal-exact";
-import { formatBalanceHours, formatDeficitHours, formatHours, normalizeUserDecimal, roundDecimal } from "../src/domain/capacity/input-format";
+import { formatBalanceHours, formatDeficitHours, formatHours, formatScreenHours, normalizeUserDecimal, roundDecimal } from "../src/domain/capacity/input-format";
 
 describe("exact user decimal normalization", () => {
   it.each([
@@ -76,5 +76,30 @@ describe("exact decimal rounding shared by the screen and the report", () => {
 
   it.each([[-1], [1.5], [Number.NaN]])("rejects precision %s", (places) => {
     expect(() => roundDecimal("1", places)).toThrow();
+  });
+});
+
+describe("hours on screen: thousands separated, whole numbers without ,00", () => {
+  const nb = " ";
+  it.each([
+    ["0", "0 ч"], ["204", "204 ч"], ["2248", `2${nb}248 ч`], ["1124", `1${nb}124 ч`], ["449.6", "449,60 ч"],
+    ["4.6", "4,60 ч"], ["-35.2", "−35,20 ч"], ["-1358", `−1${nb}358 ч`], ["1234567.891", `1${nb}234${nb}567,89 ч`],
+    ["1.0049", "1 ч"], ["1.005", "1,01 ч"], ["9.999", "10 ч"], ["-0.004", "0 ч"], ["999.995", `1${nb}000 ч`]
+  ])("shows %s as %s", (input, expected) => expect(formatScreenHours(input)).toBe(expected));
+
+  it("keeps a tiny deficit visible with the screen format", () => {
+    expect(formatDeficitHours("0.004", formatScreenHours)).toBe("<0,01 ч");
+    expect(formatBalanceHours("-0.004", formatScreenHours)).toBe("Дефицит <0,01 ч");
+    expect(formatDeficitHours("1234.5", formatScreenHours)).toBe(`1${nb}234,50 ч`);
+    expect(formatBalanceHours("-35.2", formatScreenHours)).toBe("−35,20 ч");
+  });
+
+  it("does not change the report format", () => {
+    expect(formatHours("2248")).toBe("2248,00 ч");
+    expect(formatDeficitHours("4.6")).toBe("4,60 ч");
+  });
+
+  it.each(["1.00", "-0", "NaN", ""])("requires canonical output: %j", (input) => {
+    expect(() => formatScreenHours(input)).toThrow();
   });
 });
