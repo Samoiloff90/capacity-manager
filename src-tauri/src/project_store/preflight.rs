@@ -54,7 +54,8 @@ pub(super) fn header(path: &Path) -> StoreResult<()> {
             "Файл не является проектом Capacity Planner".into(),
         ));
     }
-    if version != schema::SCHEMA_VERSION {
+    // Format 1 (0.1.0–0.3.0) opens unchanged; a newer format is refused untouched.
+    if version != schema::SCHEMA_VERSION && version != schema::LEGACY_SCHEMA_VERSION {
         return Err(StoreError::InvalidProject(
             "Версия проекта не поддерживается".into(),
         ));

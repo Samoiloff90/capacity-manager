@@ -126,6 +126,7 @@ fn production_configuration_has_no_preload_remote_capability_or_broad_permission
             "allow-project-create",
             "allow-project-open",
             "allow-project-close",
+            "allow-project-upgrade-format",
             "allow-report-save-xlsx",
         ])
     );

@@ -1,11 +1,12 @@
 //! Project lifecycle only; quarter business reads/CAS writes belong to src/db.
 //! Never call the plugin's auto-creating `load` for a selected project.
+mod backup;
 pub mod commands;
 pub mod legacy_compat;
 mod preflight;
 mod schema;
 
-pub use schema::{APPLICATION_ID, DATABASE_NAME, PAYLOAD_VERSION, SCHEMA_VERSION};
+pub use schema::{APPLICATION_ID, DATABASE_NAME, LEGACY_SCHEMA_VERSION, PAYLOAD_VERSION, SCHEMA_VERSION};
 
 use serde::Serialize;
 use sqlx::{
@@ -67,9 +68,22 @@ pub struct ProjectSession {
     pub sqlite_version: String,
 }
 
+/// Result of `project_upgrade_format`; no backup when the file already had format 2.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormatUpgrade {
+    pub schema_version: i64,
+    pub backup_path: Option<String>,
+}
+
 struct ActiveSession {
     pool: SqlitePool,
     ownership: Option<preflight::Ownership>,
+    /// The project database; its folder receives the format-1 backup.
+    path: PathBuf,
+    project_id: String,
+    /// Format of the file as opened: 1 until the first save upgrades it (DEC-044).
+    schema_version: i64,
 }
 
 impl Drop for ActiveSession {
@@ -200,6 +214,9 @@ fn start_open(
                 Ok(Ok(pool)) => Ok(ActiveSession {
                     pool,
                     ownership: worker_resources.lock().unwrap().take(),
+                    path: path.clone(),
+                    project_id: String::new(),
+                    schema_version: SCHEMA_VERSION,
                 }),
                 Ok(Err(error)) => {
                     worker_resources.lock().unwrap().take();
@@ -317,6 +334,8 @@ impl ProjectStore {
         let worker_directory = directory.clone();
         let worker_id = id.clone();
         let worker_name = name.clone();
+        let worker_path = directory.join(DATABASE_NAME);
+        let worker_project_id = id.clone();
         // A cancelled caller may receive no session, but leaves either no DB or
         // a complete valid project. The worker always closes its staging DB.
         let spawned = std::thread::Builder::new()
@@ -337,6 +356,9 @@ impl ProjectStore {
                     Ok(Ok(pool)) => Ok(ActiveSession {
                         pool,
                         ownership: worker_resources.lock().unwrap().take(),
+                        path: worker_path,
+                        project_id: worker_project_id,
+                        schema_version: SCHEMA_VERSION,
                     }),
                     Ok(Err(error)) => {
                         // Release before notifying the caller, so immediate retry
@@ -393,7 +415,7 @@ impl ProjectStore {
                 "Проект изменился во время открытия".into(),
             ));
         }
-        let active = start_open(path, ownership)?
+        let mut active = start_open(path, ownership)?
             .await
             .map_err(|_| StoreError::InvalidProject("Не удалось открыть проект".into()))??;
         // SQLite may now recover the owned hot journal; repeat full validation
@@ -403,7 +425,7 @@ impl ProjectStore {
             schema::validate(&mut connection).await
         };
         let metadata = match checked {
-            Ok(metadata) if metadata.id == before.id => metadata,
+            Ok(metadata) if metadata.id == before.id && metadata.schema_version == before.schema_version => metadata,
             Ok(_) => {
                 return Err(StoreError::InvalidProject(
                     "Проект заменён при открытии".into(),
@@ -413,8 +435,80 @@ impl ProjectStore {
                 return Err(error);
             }
         };
+        active.project_id = metadata.id.clone();
+        active.schema_version = metadata.schema_version;
         self.register(instances, directory, active, metadata.id, metadata.name)
             .await
+    }
+
+    /// Format 1 → 2 for an open session (DEC-044): checked backup first, then one
+    /// transaction. On any error the project file is as it was opened.
+    pub async fn upgrade_format(&self, session_key: &str) -> StoreResult<FormatUpgrade> {
+        self.upgrade_format_inner(session_key, schema::UpgradeFault::None)
+            .await
+    }
+
+    async fn upgrade_format_inner(
+        &self,
+        session_key: &str,
+        fault: schema::UpgradeFault,
+    ) -> StoreResult<FormatUpgrade> {
+        // Holding the registry of sessions keeps close() waiting until the upgrade ends.
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(session_key)
+            .ok_or(StoreError::ClosedSession)?;
+        if session.schema_version == SCHEMA_VERSION {
+            return Ok(FormatUpgrade {
+                schema_version: SCHEMA_VERSION,
+                backup_path: None,
+            });
+        }
+        // The pool has one connection: no other SQL of this project runs meanwhile,
+        // so the file is idle and consistent while it is copied.
+        let mut connection = session.pool.acquire().await?;
+        let current = schema::validate(&mut connection).await?;
+        if current.id != session.project_id || current.schema_version != LEGACY_SCHEMA_VERSION {
+            return Err(StoreError::InvalidProject(
+                "Проект изменился до обновления формата".into(),
+            ));
+        }
+        let made = async {
+            let path = backup::create(&session.path, fault.fails_backup())?;
+            if let Err(error) = backup::verify(&path, &session.project_id).await {
+                let _ = fs::remove_file(&path);
+                return Err(error);
+            }
+            Ok(path)
+        }
+        .await
+        .map_err(|error| {
+            StoreError::InvalidProject(format!(
+                "Не удалось создать резервную копию проекта: {error}. Исходный файл не изменён."
+            ))
+        })?;
+        let shown = backup::shown(&made);
+        schema::upgrade_from_v1(&mut connection, fault)
+            .await
+            .map_err(|error| {
+                StoreError::InvalidProject(format!(
+                    "Не удалось обновить формат проекта: {error}. Исходный файл не изменён, резервная копия: {shown}."
+                ))
+            })?;
+        // Committed: the session follows the file even if the check below fails, so a
+        // retry does not try to upgrade a file that is already format 2.
+        session.schema_version = SCHEMA_VERSION;
+        let checked = schema::validate(&mut connection).await;
+        if !matches!(&checked, Ok(upgraded) if upgraded.id == session.project_id && upgraded.schema_version == SCHEMA_VERSION) {
+            let reason = checked.err().map(|error| format!(": {error}")).unwrap_or_default();
+            return Err(StoreError::InvalidProject(format!(
+                "Формат проекта обновлён, но проверка после обновления не прошла{reason}. Резервная копия: {shown}."
+            )));
+        }
+        Ok(FormatUpgrade {
+            schema_version: SCHEMA_VERSION,
+            backup_path: Some(shown),
+        })
     }
 
     async fn register(
@@ -434,7 +528,7 @@ impl ProjectStore {
             project_id,
             name,
             folder_path: directory.to_string_lossy().into_owned(),
-            schema_version: SCHEMA_VERSION,
+            schema_version: active.schema_version,
             sqlite_version,
         };
         // Consistent lock order with close(); plugin handlers hold only registry.

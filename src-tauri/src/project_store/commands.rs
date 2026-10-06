@@ -1,5 +1,5 @@
 //! Production IPC and desktop policy shared with the MockRuntime integration test.
-use super::{ProjectSession, ProjectStore};
+use super::{FormatUpgrade, ProjectSession, ProjectStore};
 use std::path::PathBuf;
 use tauri::{App, Runtime, State, Webview, WebviewWindow};
 use tauri_plugin_sql::DbInstances;
@@ -61,6 +61,21 @@ pub async fn project_close<R: Runtime>(
         .map_err(|error| error.to_string())
 }
 
+/// Upgrades an open project of format 1 before its first save (DEC-044): a checked
+/// backup in the project folder, then one transaction. Errors leave the file unchanged.
+#[tauri::command]
+pub async fn project_upgrade_format<R: Runtime>(
+    view: Webview<R>,
+    store: State<'_, ProjectStore>,
+    session_key: String,
+) -> Result<FormatUpgrade, String> {
+    require_main(&view)?;
+    store
+        .upgrade_format(&session_key)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Composition root for all application IPC commands: one application-owned
 /// store, the report export guard, no implicit database creation or legacy preload.
 /// Every command listed here must also be declared in `build.rs` and allowed in
@@ -75,6 +90,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             project_create,
             project_open,
             project_close,
+            project_upgrade_format,
             crate::report_export::report_save_xlsx
         ])
 }

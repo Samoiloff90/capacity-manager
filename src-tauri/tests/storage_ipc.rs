@@ -140,6 +140,12 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
     )
     .unwrap();
     let key = session["sessionKey"].as_str().unwrap().to_owned();
+    // A new project is format 2 at once: the upgrade command has nothing to do and copies nothing.
+    assert_eq!(session["schemaVersion"], 2);
+    assert_eq!(
+        request(&view, "project_upgrade_format", json!({"sessionKey": key})).unwrap(),
+        json!({"schemaVersion": 2, "backupPath": null})
+    );
     let payload = json!({"year":2026,"quarter":2,"calendar":[],"competencies":[],"members":[],"absences":[],"directions":[],"tasks":[]}).to_string();
     let inserted = request(&view, "plugin:sql|execute", json!({
         "db": key, "query": "INSERT INTO quarter_plans (plan_id,year,quarter,revision,payload_version,payload_json) VALUES ($1,2026,2,1,1,$2)",
@@ -148,9 +154,10 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
     assert_eq!(inserted[0], 1);
     let changed_payload = json!({"year":2026,"quarter":2,"calendar":[],"competencies":[],"members":[],"absences":[],"directions":[{"id":"calls","name":"Встречи","percent":"100"}],"tasks":[]}).to_string();
     // Keep the exact statement/parameters used by src/db/project-snapshots.ts.
-    let save_query = "UPDATE quarter_plans SET payload_json = $1, revision = revision + 1 WHERE plan_id = $2 AND revision = $3 AND year = $4 AND quarter = $5 AND payload_version = $6";
-    for metadata in [(2025, 2, 1), (2026, 3, 1), (2026, 2, 2)] {
-        let wrong_metadata = json!({"db":key,"query":save_query,"values":[changed_payload,"quarter-a",1,metadata.0,metadata.1,metadata.2]});
+    // A saved quarter is written as format 2; the revision and the period guard the write.
+    let save_query = "UPDATE quarter_plans SET payload_json = $1, payload_version = $6, revision = revision + 1 WHERE plan_id = $2 AND revision = $3 AND year = $4 AND quarter = $5";
+    for metadata in [(2025, 2, 1), (2026, 3, 1), (2026, 2, 7)] {
+        let wrong_metadata = json!({"db":key,"query":save_query,"values":[changed_payload,"quarter-a",metadata.2,metadata.0,metadata.1,2]});
         assert_eq!(
             request(&view, "plugin:sql|execute", wrong_metadata).unwrap()[0],
             0
@@ -165,7 +172,7 @@ fn native_session_and_real_plugin_ipc_preserve_snapshots_and_enforce_lifecycle_a
     assert_eq!(unchanged[0]["revision"], 1);
     assert_eq!(unchanged[0]["payload_json"], payload);
     let save =
-        json!({"db":key,"query":save_query,"values":[changed_payload,"quarter-a",1,2026,2,1]});
+        json!({"db":key,"query":save_query,"values":[changed_payload,"quarter-a",1,2026,2,2]});
     assert_eq!(
         request(&view, "plugin:sql|execute", save.clone()).unwrap()[0],
         1
@@ -230,6 +237,7 @@ fn app_commands_are_admitted_only_for_the_main_window_and_report_bodies_are_vali
         "project_create",
         "project_open",
         "project_close",
+        "project_upgrade_format",
         "report_save_xlsx",
     ] {
         let error = request(&view, command, json!({})).unwrap_err();

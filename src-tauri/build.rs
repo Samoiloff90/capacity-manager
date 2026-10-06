@@ -4,6 +4,7 @@ const APP_COMMANDS: &[&str] = &[
     "project_create",
     "project_open",
     "project_close",
+    "project_upgrade_format",
     "report_save_xlsx",
 ];
 
