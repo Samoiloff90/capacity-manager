@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PROJECT_NAME_FORM, ProjectWorkspaceController, type DiscardAnswer, type WorkspaceRepository } from "../src/app/project-workspace-controller";
 import type { QuarterReport } from "../src/export/quarter-report";
 import type { ReportSaveOutcome } from "../src/export/report-file";
-import { ProjectPersistenceError, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
+import { ProjectPersistenceError, type FormatUpgrade, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
 import type { Quarter } from "../src/domain/capacity/calendar-quarter";
 import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
 import type { QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
@@ -25,7 +25,7 @@ function savedPlan(planId: string, quarter: Quarter): StoredQuarterPlan {
   const calendar = createQuarterCalendar(2026, quarter);
   if (!calendar.ok) throw new Error(calendar.message);
   return {
-    planId, revision: 1,
+    planId, revision: 1, payloadVersion: 2,
     snapshot: {
       year: 2026, quarter, calendar: calendar.calendar, calendarSource: calendar.calendarSource,
       competencies: [{ id: "dev", name: "Разработка" }],
@@ -40,10 +40,10 @@ class MemoryRepository implements WorkspaceRepository {
   session: ProjectSession;
   readonly rows: Map<string, StoredQuarterPlan>;
 
-  constructor(plans: StoredQuarterPlan[] = [savedPlan("q1", 1), savedPlan("q2", 2)]) {
+  constructor(plans: StoredQuarterPlan[] = [savedPlan("q1", 1), savedPlan("q2", 2)], schemaVersion: 1 | 2 = 2) {
     this.session = {
       sessionKey: "session-a", projectId: "project-a", name: "Команда А",
-      folderPath: folderA, schemaVersion: 1, sqliteVersion: "test"
+      folderPath: folderA, schemaVersion, sqliteVersion: "test"
     };
     this.rows = new Map(plans.map((plan) => [plan.planId, clone(plan)]));
   }
@@ -51,7 +51,8 @@ class MemoryRepository implements WorkspaceRepository {
   list = vi.fn(async (): Promise<StoredQuarterPlan[]> => clone([...this.rows.values()]));
 
   create = vi.fn(async (planId: string, input: unknown): Promise<StoredQuarterPlan> => {
-    const saved = { planId, revision: 1, snapshot: clone(input as QuarterSnapshot) };
+    this.requireCurrentFormat();
+    const saved = { planId, revision: 1, payloadVersion: 2 as const, snapshot: clone(input as QuarterSnapshot) };
     this.rows.set(planId, saved);
     return clone(saved);
   });
@@ -61,9 +62,21 @@ class MemoryRepository implements WorkspaceRepository {
     if (!previous || previous.revision !== expectedRevision) {
       throw new ProjectPersistenceError("CONFLICT", "План уже изменён");
     }
-    const saved = { planId, revision: expectedRevision + 1, snapshot: clone(input as QuarterSnapshot) };
+    this.requireCurrentFormat();
+    const saved = { planId, revision: expectedRevision + 1, payloadVersion: 2 as const, snapshot: clone(input as QuarterSnapshot) };
     this.rows.set(planId, saved);
     return clone(saved);
+  });
+
+  /** As the real store: quarters are written only after a format-1 project is upgraded. */
+  private requireCurrentFormat() {
+    if (this.session.schemaVersion !== 2) throw new ProjectPersistenceError("FORMAT_UPGRADE_REQUIRED", "Сначала нужно обновить формат проекта.");
+  }
+
+  upgradeFormat = vi.fn(async (): Promise<FormatUpgrade> => {
+    const backupPath = this.session.schemaVersion === 2 ? null : `${folderA}\\capacity-backup-format1-2026-10-06.sqlite`;
+    this.session = { ...this.session, schemaVersion: 2 };
+    return { schemaVersion: 2, backupPath };
   });
 
   close = vi.fn(async (_options?: { discardFailedWrites?: boolean }): Promise<void> => {});
@@ -74,13 +87,14 @@ class MemoryRepository implements WorkspaceRepository {
   });
 }
 
-function workspace(repository = new MemoryRepository(), confirmDiscard?: (message: string, canSave: boolean) => Promise<DiscardAnswer>) {
+function workspace(repository = new MemoryRepository(), confirmDiscard?: (message: string, canSave: boolean) => Promise<DiscardAnswer>,
+  confirmFormatUpgrade?: (message: string, folderPath: string) => Promise<boolean>) {
   const preferences = new Map<string, string>();
   const createProject = vi.fn(async (_folder: string, _name: string): Promise<WorkspaceRepository> => repository);
   const openProject = vi.fn(async (_folder: string): Promise<WorkspaceRepository> => repository);
   let nextId = 0;
   const dependencies = {
-    createProject, openProject, id: () => `generated-${++nextId}`, confirmDiscard,
+    createProject, openProject, id: () => `generated-${++nextId}`, confirmDiscard, confirmFormatUpgrade,
     pickFolder: vi.fn(async (_title: string): Promise<string | null> => folderA),
     readSelectedPlan: (projectId: string) => preferences.get(projectId) ?? null,
     writeSelectedPlan: (projectId: string, planId: string) => { preferences.set(projectId, planId); },
@@ -217,7 +231,7 @@ describe("project workspace lifecycle and unsaved changes", () => {
       const snapshot = clone(input as QuarterSnapshot);
       started.resolve();
       await finish.promise;
-      const saved = { planId, revision: revision + 1, snapshot };
+      const saved = { planId, revision: revision + 1, payloadVersion: 2 as const, snapshot };
       repository.rows.set(planId, saved);
       return clone(saved);
     });
@@ -403,16 +417,16 @@ describe("project workspace lifecycle and unsaved changes", () => {
     await controller.actions.openProject(folderA);
     await controller.actions.selectPlan("q2");
     const tasks = [
-      { id: "planned", name: "Работа продукта", directionId: "product", estimateHours: "120.125" },
-      { id: "zero", name: "Явный ноль", directionId: "product", estimateHours: "0" },
-      { id: "unknown", name: "Оценка ожидается", directionId: "bugs", estimateHours: null }
+      { id: "planned", name: "Работа продукта", directionId: "product", estimateHours: "120.125", mark: "plan" as const, link: null, comment: null },
+      { id: "zero", name: "Явный ноль", directionId: "product", estimateHours: "0", mark: "plan" as const, link: null, comment: null },
+      { id: "unknown", name: "Оценка ожидается", directionId: "bugs", estimateHours: null, mark: "plan" as const, link: null, comment: null }
     ];
     controller.actions.updateDraft((draft) => ({
       ...draft,
       directions: [
-        { id: "product", name: "Продукт", percent: "20" },
-        { id: "bugs", name: "Баги", percent: "30" },
-        { id: "meetings", name: "Встречи", percent: "50" }
+        { id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] },
+        { id: "bugs", name: "Баги", percent: "30", kind: "work" as const, memberPercents: [] },
+        { id: "meetings", name: "Встречи", percent: "50", kind: "work" as const, memberPercents: [] }
       ], tasks
     }));
     expect(await controller.actions.save()).toBe(true);
@@ -441,8 +455,8 @@ describe("project workspace lifecycle and unsaved changes", () => {
     await controller.actions.selectPlan("q2");
     controller.actions.updateDraft((draft) => ({
       ...draft,
-      directions: [{ id: "product", name: "Продукт", percent: "50" }, { id: "bugs", name: "Баги", percent: "50" }],
-      tasks: [{ id: "task", name: "Переносимая работа", directionId: "product", estimateHours: "60" }]
+      directions: [{ id: "product", name: "Продукт", percent: "50", kind: "work" as const, memberPercents: [] }, { id: "bugs", name: "Баги", percent: "50", kind: "work" as const, memberPercents: [] }],
+      tasks: [{ id: "task", name: "Переносимая работа", directionId: "product", estimateHours: "60", mark: "plan" as const, link: null, comment: null }]
     }));
     expect(await controller.actions.save()).toBe(true);
     controller.actions.updateDraft((draft) => ({ ...draft, tasks: draft.tasks.map((task) => ({ ...task, directionId: "bugs" })) }));
@@ -454,7 +468,7 @@ describe("project workspace lifecycle and unsaved changes", () => {
       .toMatchObject({ knownDemandHours: "60", remainingKnownHours: "188" });
     expect(await controller.actions.save()).toBe(true);
     expect(repository.rows.get("q2")?.snapshot.tasks).toEqual([
-      { id: "task", name: "Переносимая работа", directionId: "bugs", estimateHours: "60" }
+      { id: "task", name: "Переносимая работа", directionId: "bugs", estimateHours: "60", mark: "plan" as const, link: null, comment: null }
     ]);
     controller.actions.updateDraft((draft) => ({ ...draft, tasks: draft.tasks.filter((task) => task.id !== "task") }));
     expect(await controller.actions.save()).toBe(true);
@@ -477,8 +491,8 @@ describe("project workspace lifecycle and unsaved changes", () => {
     await controller.actions.selectPlan("q2");
     const persisted = clone(repository.rows.get("q2"));
     controller.actions.updateDraft((draft) => ({
-      ...draft, directions: [{ id: "product", name: "Продукт", percent: "100" }],
-      tasks: [{ id: "task", name: "Работа", directionId, estimateHours }]
+      ...draft, directions: [{ id: "product", name: "Продукт", percent: "100", kind: "work" as const, memberPercents: [] }],
+      tasks: [{ id: "task", name: "Работа", directionId, estimateHours, mark: "plan" as const, link: null, comment: null }]
     }));
     const raw = clone(controller.getSnapshot().draft);
     expect(await controller.actions.save()).toBe(false);
@@ -488,7 +502,7 @@ describe("project workspace lifecycle and unsaved changes", () => {
     expect(controller.getSnapshot().error).toBeTruthy();
     expect(repository.rows.get("q2")).toEqual(persisted);
     controller.actions.updateDraft((draft) => ({
-      ...draft, tasks: draft.tasks.map((task) => ({ ...task, directionId: "product", estimateHours: "10.25" }))
+      ...draft, tasks: draft.tasks.map((task) => ({ ...task, directionId: "product", estimateHours: "10.25", mark: "plan" as const, link: null, comment: null }))
     }));
     expect(await controller.actions.save()).toBe(true);
     expect(controller.getSnapshot().dirty).toBe(false);
@@ -537,8 +551,8 @@ describe("unsaved-changes dialog with saving", () => {
     await controller.actions.selectPlan("q1");
     // The inputs replace "," with "." while typing and normalize on blur; the dialog takes focus first.
     changeFte(controller, "0.50");
-    controller.actions.updateDraft((draft) => ({ ...draft, directions: [{ id: "product", name: "Продукт", percent: "100.0" }],
-      tasks: [{ id: "task", name: "Задача", directionId: "product", estimateHours: "1.0" }] }));
+    controller.actions.updateDraft((draft) => ({ ...draft, directions: [{ id: "product", name: "Продукт", percent: "100.0", kind: "work" as const, memberPercents: [] }],
+      tasks: [{ id: "task", name: "Задача", directionId: "product", estimateHours: "1.0", mark: "plan" as const, link: null, comment: null }] }));
     expect(await controller.actions.selectPlan("q2")).toBe(true);
     const saved = repository.rows.get("q1")!.snapshot;
     expect([saved.members[0].fte, saved.directions[0].percent, saved.tasks[0].estimateHours]).toEqual(["0.5", "100", "1"]);
@@ -591,13 +605,13 @@ describe("new quarter copied from a saved quarter", () => {
   function teamPlan(planId: string, year: number, quarter: Quarter): StoredQuarterPlan {
     const calendar = createQuarterCalendar(year, quarter);
     if (!calendar.ok) throw new Error(calendar.message);
-    return { planId, revision: 3, snapshot: {
+    return { planId, revision: 3, payloadVersion: 2, snapshot: {
       year, quarter, calendar: calendar.calendar, calendarSource: calendar.calendarSource,
       competencies: [{ id: "sa", name: "SA" }, { id: "java", name: "Java" }],
       members: [{ id: "ivan", name: "Иван", competencyId: "sa", fte: "1" }, { id: "olga", name: "Ольга", competencyId: "java", fte: "0.5" }],
       absences: [{ id: "vacation", memberId: "ivan", startDate: `${year}-${String(quarter * 3 - 1).padStart(2, "0")}-02`, endDate: `${year}-${String(quarter * 3 - 1).padStart(2, "0")}-06` }],
-      directions: [{ id: "product", name: "Продукт", percent: "70" }, { id: "meetings", name: "Встречи", percent: "30" }],
-      tasks: [{ id: "task", name: "Онбординг", directionId: "product", estimateHours: "40" }]
+      directions: [{ id: "product", name: "Продукт", percent: "70", kind: "work" as const, memberPercents: [] }, { id: "meetings", name: "Встречи", percent: "30", kind: "work" as const, memberPercents: [] }],
+      tasks: [{ id: "task", name: "Онбординг", directionId: "product", estimateHours: "40", mark: "plan" as const, link: null, comment: null }]
     } };
   }
 
@@ -759,6 +773,133 @@ describe("exporting the saved quarter", () => {
     expect(await exporting).toBe(true);
     expect(await closing).toBe(true);
     expect(repository.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("first save of a project made by 0.1.0–0.3.0 (DEC-044)", () => {
+  const backup = `${folderA}\\capacity-backup-format1-2026-10-06.sqlite`;
+  const legacy = () => new MemoryRepository([savedPlan("q1", 1), savedPlan("q2", 2)], 1);
+
+  it("opens without writing and asks before the first save; cancelling writes nothing", async () => {
+    const confirm = vi.fn(async (_message: string, _folder: string) => false);
+    const { controller, repository } = workspace(legacy(), undefined, confirm);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    expect(repository.upgradeFormat).not.toHaveBeenCalled();
+    changeFte(controller, "0.5");
+    expect(await controller.actions.save()).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(
+      "После обновления формата этот файл нельзя будет открыть в версии 0.3.0. Перед сохранением будет создана резервная копия исходного проекта.",
+      folderA);
+    expect(repository.upgradeFormat).not.toHaveBeenCalled();
+    expect(repository.save).not.toHaveBeenCalled();
+    const state = controller.getSnapshot();
+    expect(state.dirty).toBe(true);
+    expect(state.error).toBe("");
+    expect(state.project?.schemaVersion).toBe(1);
+  });
+
+  it("upgrades with a backup, saves, names the backup and asks only once", async () => {
+    const confirm = vi.fn(async () => true);
+    const { controller, repository } = workspace(legacy(), undefined, confirm);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    expect(await controller.actions.save()).toBe(true);
+    expect(repository.upgradeFormat).toHaveBeenCalledTimes(1);
+    expect(repository.upgradeFormat.mock.invocationCallOrder[0]).toBeLessThan(repository.save.mock.invocationCallOrder[0]);
+    const state = controller.getSnapshot();
+    expect(state.notice).toBe(`Формат проекта обновлён. Резервная копия исходного проекта: ${backup}. Расчёт сохранён в папке проекта.`);
+    expect(state.project?.schemaVersion).toBe(2);
+    expect(state.dirty).toBe(false);
+    changeFte(controller, "0.75");
+    expect(await controller.actions.save()).toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(repository.upgradeFormat).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().notice).toBe("Расчёт сохранён в папке проекта.");
+  });
+
+  it("does not save when the upgrade fails and shows why", async () => {
+    const repository = legacy();
+    repository.upgradeFormat.mockRejectedValueOnce(new Error("Не удалось создать резервную копию проекта. Исходный файл не изменён."));
+    const { controller } = workspace(repository, undefined, async () => true);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    expect(await controller.actions.save()).toBe(false);
+    expect(repository.save).not.toHaveBeenCalled();
+    const state = controller.getSnapshot();
+    expect(state.error).toBe("Не удалось создать резервную копию проекта. Исходный файл не изменён.");
+    expect(state.dirty).toBe(true);
+    expect(state.project?.schemaVersion).toBe(1);
+  });
+
+  it("still names the backup when the save after a successful upgrade fails", async () => {
+    const repository = legacy();
+    repository.save.mockRejectedValueOnce(new Error("Нет места на диске"));
+    const { controller } = workspace(repository, undefined, async () => true);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    expect(await controller.actions.save()).toBe(false);
+    const state = controller.getSnapshot();
+    expect(state.error).toBe("Нет места на диске");
+    expect(state.notice).toBe(`Формат проекта обновлён. Резервная копия исходного проекта: ${backup}.`);
+    expect(state.project?.schemaVersion).toBe(2);
+    expect(state.dirty).toBe(true);
+  });
+
+  it("«Сохранить и продолжить» with a declined upgrade keeps the user on the same quarter", async () => {
+    const { controller, repository } = workspace(legacy(), async () => "save", async () => false);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    expect(await controller.actions.selectPlan("q2")).toBe(false);
+    expect(controller.getSnapshot().activePlanId).toBe("q1");
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it("asks before creating a quarter, because a new quarter is written at once", async () => {
+    const confirm = vi.fn(async () => false);
+    const { controller, repository } = workspace(legacy(), undefined, confirm);
+    await controller.actions.openProject(folderA);
+    expect(await controller.actions.createPlan(2026, 3)).toBe(false);
+    expect(repository.create).not.toHaveBeenCalled();
+    confirm.mockResolvedValueOnce(true);
+    expect(await controller.actions.createPlan(2026, 3)).toBe(true);
+    expect(repository.upgradeFormat).toHaveBeenCalledTimes(1);
+    expect(repository.create).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().notice).toBe(`Формат проекта обновлён. Резервная копия исходного проекта: ${backup}. Квартал создан. Заполните команду и сохраните расчёт.`);
+  });
+
+  it("keeps the backup in the notice when «Сохранить и продолжить» upgraded the file before a new quarter", async () => {
+    const { controller, repository } = workspace(legacy(), async () => "save", async () => true);
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    expect(await controller.actions.createPlan(2026, 3)).toBe(true);
+    expect(repository.upgradeFormat).toHaveBeenCalledTimes(1);
+    expect(repository.save).toHaveBeenCalledTimes(1);
+    expect(repository.create).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().notice).toBe(`Формат проекта обновлён. Резервная копия исходного проекта: ${backup}. Квартал создан. Заполните команду и сохраните расчёт.`);
+  });
+
+  it("shows the question in the window and continues after the answer", async () => {
+    const { controller, repository } = workspace(legacy());
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    const saving = controller.actions.save();
+    await vi.waitFor(() => expect(controller.getSnapshot().formatUpgrade).not.toBeNull());
+    expect(controller.getSnapshot().formatUpgrade).toEqual({
+      message: "После обновления формата этот файл нельзя будет открыть в версии 0.3.0. Перед сохранением будет создана резервная копия исходного проекта.",
+      folderPath: folderA
+    });
+    controller.actions.answerFormatUpgrade(true);
+    expect(await saving).toBe(true);
+    expect(controller.getSnapshot().formatUpgrade).toBeNull();
+    expect(repository.save).toHaveBeenCalledTimes(1);
   });
 });
 

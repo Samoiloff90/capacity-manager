@@ -65,8 +65,8 @@ describe("XLSX rendering of the quarter report", () => {
 
   it("applies the agreed formats and colours", async () => {
     const files = await workbook(readmeQuarter({ tasks: [
-      { id: "t1", name: "Без оценки", directionId: "z-product", estimateHours: null },
-      { id: "t2", name: "Большая", directionId: "z-product", estimateHours: "100" }
+      { id: "t1", name: "Без оценки", directionId: "z-product", estimateHours: null, mark: "plan" as const, link: null, comment: null },
+      { id: "t2", name: "Большая", directionId: "z-product", estimateHours: "100", mark: "plan" as const, link: null, comment: null }
     ] }));
     const styles = files["xl/styles.xml"];
     for (const colour of ["FFE8EEF5", "FFFDECEC", "FF9B1C1C", "FF8A5A00"]) expect(styles).toContain(colour);
@@ -80,8 +80,8 @@ describe("XLSX rendering of the quarter report", () => {
 
   it("keeps user text as text, never as a formula", async () => {
     const files = await workbook(readmeQuarter({ tasks: [
-      { id: "t1", name: "<b>A & B</b> =1+1", directionId: "z-product", estimateHours: "1" },
-      { id: "t2", name: "=HYPERLINK(\"x\")", directionId: "z-product", estimateHours: "1" }
+      { id: "t1", name: "<b>A & B</b> =1+1", directionId: "z-product", estimateHours: "1", mark: "plan" as const, link: null, comment: null },
+      { id: "t2", name: "=HYPERLINK(\"x\")", directionId: "z-product", estimateHours: "1", mark: "plan" as const, link: null, comment: null }
     ] }));
     const strings = sharedStrings(files).join("\n");
     expect(strings).toContain("&lt;b&gt;A &amp; B&lt;/b&gt; =1+1");
@@ -91,7 +91,7 @@ describe("XLSX rendering of the quarter report", () => {
 
   it("does not corrupt shared strings for names of Object.prototype members", async () => {
     const files = await workbook(readmeQuarter({ tasks: ["constructor", "__proto__", "toString", "valueOf"].map((name, index) => (
-      { id: `t${index}`, name, directionId: "z-product", estimateHours: "1" }
+      { id: `t${index}`, name, directionId: "z-product", estimateHours: "1", mark: "plan" as const, link: null, comment: null }
     )) }));
     const count = sharedStrings(files).length;
     for (let sheet = 1; sheet <= 6; sheet += 1) {
@@ -118,10 +118,10 @@ describe("XLSX rendering of the quarter report", () => {
   it("keeps every digit: values beyond Excel's 15 significant digits become the screen text", async () => {
     const files = await workbook(readmeQuarter({
       directions: [
-        { id: "z-product", name: "Продукт", percent: "33.3333333333333333" },
-        { id: "a-meetings", name: "Встречи и прочее", percent: "66.6666666666666667" }
+        { id: "z-product", name: "Продукт", percent: "33.3333333333333333", kind: "work" as const, memberPercents: [] },
+        { id: "a-meetings", name: "Встречи и прочее", percent: "66.6666666666666667", kind: "work" as const, memberPercents: [] }
       ],
-      tasks: [{ id: "t1", name: "Огромная", directionId: "z-product", estimateHours: "12345678901234.56" }]
+      tasks: [{ id: "t1", name: "Огромная", directionId: "z-product", estimateHours: "12345678901234.56", mark: "plan" as const, link: null, comment: null }]
     }));
     const strings = sharedStrings(files);
     expect(strings).toEqual(expect.arrayContaining([
@@ -148,7 +148,7 @@ describe("XLSX rendering of the quarter report", () => {
     vi.mocked(fflate.zip).mockClear();
     const tasks = Array.from({ length: 3000 }, (_, index) => ({
       id: `t${index}`, name: `Задача с достаточно длинным названием номер ${index}`,
-      directionId: "z-product", estimateHours: String(index % 40)
+      directionId: "z-product", estimateHours: String(index % 40), mark: "plan" as const, link: null, comment: null
     }));
     const files = await workbook(readmeQuarter({ tasks }));
     expect(new TextEncoder().encode(sheetXml(files, 5)).length).toBeGreaterThanOrEqual(160_000);

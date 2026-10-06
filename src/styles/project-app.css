@@ -79,6 +79,7 @@
 .project-title-row { align-items: center; display: flex; gap: 4px; min-width: 0; }
 .project-title h1 { font-size: 21px; overflow-wrap: anywhere; padding: 0; }
 .project-title .project-path { color: #667085; font-size: 12px; margin-top: 1px; overflow-wrap: anywhere; }
+.project-path-inline { font-weight: 600; overflow-wrap: anywhere; }
 .project-title .project-rename { margin: 0; }
 .project-app .project-save-button::after { background: rgba(255, 255, 255, .2); border: 1px solid rgba(255, 255, 255, .35); border-radius: 4px; content: attr(data-shortcut); font-size: 11px; margin-left: 2px; padding: 0 5px; }
 .project-status { border-radius: 20px; font-size: 12px; padding: 5px 10px; white-space: nowrap; }

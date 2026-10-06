@@ -102,14 +102,15 @@ export function buildQuarterReport({ teamName, snapshot, result, exportedAt }: Q
     return {
       tone: balance.deficit ? "deficit" : balance.status === "preliminary" ? "preliminary" : undefined,
       cells: [
-        text(direction.name), percent(row.percent), hours(row.budgetHours), hours(row.knownDemandHours),
+        text(direction.name), row.percent === null ? text("Не задана") : percent(row.percent), hours(row.budgetHours), hours(row.knownDemandHours),
         count(row.missingEstimateCount), hours(row.remainingKnownHours),
         text(`${balance.balanceLabel} ${balance.balanceText}`), balance.note ? text(balance.note) : empty
       ]
     };
   });
 
-  const taskRows: ReportRow[] = snapshot.tasks.map((task) => ({
+  // The sheet lists the works that take the budget, as the balance does; other marks come with stage 6.
+  const taskRows: ReportRow[] = snapshot.tasks.filter((task) => task.mark === "plan").map((task) => ({
     tone: task.estimateHours === null ? "preliminary" : undefined,
     cells: [
       text(task.name), text(directionNames.get(task.directionId) ?? ""),

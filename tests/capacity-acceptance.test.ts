@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import fixture from "./fixtures/capacity-acceptance.json";
 import { calculateQuarterCapacity } from "../src/domain/capacity/quarter-capacity.calculator";
-import type { QuarterCapacityResult, QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
+import type { QuarterCapacityResult, QuarterSnapshotV1 } from "../src/domain/capacity/quarter-capacity.types";
+import { readStoredQuarterSnapshot } from "../src/domain/capacity/quarter-snapshot-format";
 
 type AcceptanceCase = {
   id: string;
   title: string;
   kind: "control" | "generated";
-  snapshot: QuarterSnapshot;
+  /** Format 1, as 0.1.0–0.3.0 store it: read the way the application reads a saved quarter. */
+  snapshot: QuarterSnapshotV1;
   expected: QuarterCapacityResult;
 };
 
@@ -37,9 +39,11 @@ function normalized(result: QuarterCapacityResult): QuarterCapacityResult {
   };
 }
 
-function calculate(snapshot: QuarterSnapshot): QuarterCapacityResult {
+function calculate(snapshot: QuarterSnapshotV1): QuarterCapacityResult {
   freezeRecursively(snapshot);
-  const output = calculateQuarterCapacity(snapshot);
+  const read = readStoredQuarterSnapshot(1, snapshot);
+  if (!read.ok) throw new Error(`Valid reference snapshot was rejected: ${JSON.stringify(read.errors)}`);
+  const output = calculateQuarterCapacity(read.snapshot);
   if (!output.ok) throw new Error(`Valid reference snapshot was rejected: ${JSON.stringify(output.errors)}`);
   return normalized(output.result);
 }
@@ -71,7 +75,7 @@ describe("independent numerical acceptance against Python datetime/Fraction", ()
   it("uses the same exact reference when calendar, people, absences and tasks arrive in reverse order", () => {
     for (const id of ["absence-union-leap-boundaries", "exact-100-long-decimal", "generated-24"]) {
       const item = control(id);
-      const snapshot: QuarterSnapshot = {
+      const snapshot: QuarterSnapshotV1 = {
         ...item.snapshot,
         calendar: [...item.snapshot.calendar].reverse(),
         competencies: [...item.snapshot.competencies].reverse(),

@@ -99,7 +99,7 @@ describe("quarter report model: preliminary plans and edge cases", () => {
   it("marks a missing estimate as not estimated and the plan as preliminary", () => {
     const snapshot = readmeQuarter();
     const result = report(readmeQuarter({ tasks: [
-      ...snapshot.tasks, { id: "t3", name: "Без оценки", directionId: "z-product", estimateHours: null }
+      ...snapshot.tasks, { id: "t3", name: "Без оценки", directionId: "z-product", estimateHours: null, mark: "plan" as const, link: null, comment: null }
     ] }));
     const values = summary(result);
     expect(values.get("Статус плана")).toBe("Предварительный");
@@ -118,7 +118,7 @@ describe("quarter report model: preliminary plans and edge cases", () => {
 
   it("keeps a sub-cent deficit visible", () => {
     const result = report(readmeQuarter({ tasks: [
-      { id: "t1", name: "Почти весь бюджет", directionId: "z-product", estimateHours: "50.401" }
+      { id: "t1", name: "Почти весь бюджет", directionId: "z-product", estimateHours: "50.401", mark: "plan" as const, link: null, comment: null }
     ] }));
     const [product] = rows(result, "Направления");
     expect(product[5]).toBe("-0.001");
@@ -128,7 +128,7 @@ describe("quarter report model: preliminary plans and edge cases", () => {
 
   it("explains an allocation that is not 100%", () => {
     const result = report(readmeQuarter({ directions: [
-      { id: "z-product", name: "Продукт", percent: "20" }, { id: "a-meetings", name: "Встречи и прочее", percent: "70" }
+      { id: "z-product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "a-meetings", name: "Встречи и прочее", percent: "70", kind: "work" as const, memberPercents: [] }
     ] }));
     expect(summary(result).get("Причины")).toBe("Сумма долей направлений 90% вместо 100%.");
     expect(sheet(result, "Направления").map((row) => row.tone)).toEqual(["deficit", "preliminary"]);

@@ -19,12 +19,12 @@ export function readmeQuarter(changes: Partial<QuarterSnapshot> = {}): QuarterSn
     members: [{ id: "z-member", name: "Тестовый сотрудник", competencyId: "z-dev", fte: "0.5" }],
     absences: [{ id: "a1", memberId: "z-member", startDate: "2026-10-01", endDate: "2026-10-02" }],
     directions: [
-      { id: "z-product", name: "Продукт", percent: "20" },
-      { id: "a-meetings", name: "Встречи и прочее", percent: "80" }
+      { id: "z-product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] },
+      { id: "a-meetings", name: "Встречи и прочее", percent: "80", kind: "work" as const, memberPercents: [] }
     ],
     tasks: [
-      { id: "t2", name: "Задача 30", directionId: "z-product", estimateHours: "30" },
-      { id: "t1", name: "Задача 25", directionId: "z-product", estimateHours: "25" }
+      { id: "t2", name: "Задача 30", directionId: "z-product", estimateHours: "30", mark: "plan" as const, link: null, comment: null },
+      { id: "t1", name: "Задача 25", directionId: "z-product", estimateHours: "25", mark: "plan" as const, link: null, comment: null }
     ],
     ...changes
   };

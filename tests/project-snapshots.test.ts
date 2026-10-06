@@ -9,7 +9,7 @@ import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
 const ipc = vi.fn<(command: string, args?: InvokeArgs) => Promise<unknown>>();
 const session: ProjectSession = {
   sessionKey: "session-a", projectId: "team-a", name: "Команда А",
-  folderPath: "D:\\Тест команды\\проект % #", schemaVersion: 1, sqliteVersion: "test-engine"
+  folderPath: "D:\\Тест команды\\проект % #", schemaVersion: 2, sqliteVersion: "test-engine"
 };
 
 function draft(): QuarterSnapshot {
@@ -17,7 +17,7 @@ function draft(): QuarterSnapshot {
 }
 
 function row(overrides: Record<string, unknown> = {}) {
-  return { plan_id: "plan-a", year: 2026, quarter: 2, revision: 1, payload_version: 1, payload_json: JSON.stringify(draft()), ...overrides };
+  return { plan_id: "plan-a", year: 2026, quarter: 2, revision: 1, payload_version: 2, payload_json: JSON.stringify(draft()), ...overrides };
 }
 
 beforeEach(() => {
@@ -120,14 +120,14 @@ describe("project snapshot adapter using the real SQL plugin JavaScript client",
     expect(ipc).toHaveBeenCalledTimes(1);
     const [command, args] = ipc.mock.calls[0];
     expect(command).toBe("plugin:sql|execute");
-    expect(args).toMatchObject({ db: session.sessionKey, values: ["plan'; DROP TABLE quarter_plans; --", 2026, 2, 1, JSON.stringify(draft())] });
+    expect(args).toMatchObject({ db: session.sessionKey, values: ["plan'; DROP TABLE quarter_plans; --", 2026, 2, 2, JSON.stringify(draft())] });
     expect((args as { query: string }).query).not.toContain("DROP TABLE");
   });
 
   it("preserves null estimates and invalid total allocation as a draft across read/write", async () => {
     const input = { ...draft() };
-    input.directions = [{ id: "product", name: "Продукт", percent: "90" }];
-    input.tasks = [{ id: "task", name: "Задача", directionId: "product", estimateHours: null }];
+    input.directions = [{ id: "product", name: "Продукт", percent: "90", kind: "work" as const, memberPercents: [] }];
+    input.tasks = [{ id: "task", name: "Задача", directionId: "product", estimateHours: null, mark: "plan" as const, link: null, comment: null }];
     ipc.mockResolvedValueOnce([1, 0]).mockResolvedValueOnce([row({ payload_json: JSON.stringify(input) })]);
     const project = new ProjectSnapshots(session);
     await project.create("plan-a", input);
@@ -139,7 +139,10 @@ describe("project snapshot adapter using the real SQL plugin JavaScript client",
     const project = new ProjectSnapshots(session);
     await expect(project.save("plan-a", 3, draft())).rejects.toMatchObject({ code: "CONFLICT" });
     expect(ipc).toHaveBeenCalledTimes(1);
-    expect(ipc.mock.calls[0][1]).toMatchObject({ values: [JSON.stringify(draft()), "plan-a", 3, 2026, 2, 1] });
+    expect(ipc.mock.calls[0][1]).toMatchObject({
+      query: "UPDATE quarter_plans SET payload_json = $1, payload_version = $6, revision = revision + 1 WHERE plan_id = $2 AND revision = $3 AND year = $4 AND quarter = $5",
+      values: [JSON.stringify(draft()), "plan-a", 3, 2026, 2, 2]
+    });
     await expect(project.close()).rejects.toMatchObject({ code: "UNSAVED_CHANGES" });
     expect(ipc).toHaveBeenCalledTimes(1);
     ipc.mockResolvedValueOnce([1, 0]).mockResolvedValueOnce(undefined);
@@ -177,16 +180,70 @@ describe("project snapshot adapter using the real SQL plugin JavaScript client",
   });
 
   it.each([
-    row({ payload_version: 2 }), row({ payload_json: "{" }), row({ year: 2025 }),
+    row({ payload_version: 3 }), row({ payload_json: "{" }), row({ year: 2025 }),
+    // Format 1 is exactly what 0.1.0–0.3.0 wrote; format 2 has no implicit defaults.
+    row({ payload_version: 1, payload_json: JSON.stringify({ ...draft(), directions: [{ id: "d", name: "Д", percent: "10", kind: "work", memberPercents: [] }] }) }),
+    row({ payload_json: JSON.stringify({ ...draft(), directions: [{ id: "d", name: "Д", percent: "10" }] }) }),
     row({ revision: 0 }), row({ payload_json: JSON.stringify({ ...draft(), members: [{ id: "x", name: "X", competencyId: "missing", fte: "1" }] }) })
   ])("rejects a corrupt or unsupported row on read", async (value) => {
     ipc.mockResolvedValue([value]);
     await expect(new ProjectSnapshots(session).get("plan-a")).rejects.toMatchObject({ code: "INVALID_DATA" });
   });
 
+  it("reads a quarter saved by 0.3.0 in memory without writing anything", async () => {
+    const legacy = { ...draft(),
+      directions: [{ id: "meetings", name: "Встречи", percent: "20" }, { id: "product", name: "Продукт", percent: "80" }],
+      tasks: [{ id: "t1", name: "Задача", directionId: "product", estimateHours: "12.5" }, { id: "t2", name: "Без оценки", directionId: "product", estimateHours: null }]
+    };
+    ipc.mockResolvedValueOnce([row({ payload_version: 1, payload_json: JSON.stringify(legacy) })]);
+    const project = new ProjectSnapshots({ ...session, schemaVersion: 1 });
+    const [stored] = await project.list();
+    expect(stored.payloadVersion).toBe(1);
+    // «Встречи» stay a work source: a reserve is never guessed from a name.
+    expect(stored.snapshot.directions).toEqual([
+      { id: "meetings", name: "Встречи", percent: "20", kind: "work", memberPercents: [] },
+      { id: "product", name: "Продукт", percent: "80", kind: "work", memberPercents: [] }
+    ]);
+    expect(stored.snapshot.tasks).toEqual([
+      { id: "t1", name: "Задача", directionId: "product", estimateHours: "12.5", mark: "plan", link: null, comment: null },
+      { id: "t2", name: "Без оценки", directionId: "product", estimateHours: null, mark: "plan", link: null, comment: null }
+    ]);
+    expect(ipc.mock.calls.map(([command]) => command)).toEqual(["plugin:sql|select"]);
+  });
+
+  it("does not write a quarter into a project of format 1 before the format upgrade", async () => {
+    const project = new ProjectSnapshots({ ...session, schemaVersion: 1 });
+    await expect(project.save("plan-a", 1, draft())).rejects.toMatchObject({ code: "FORMAT_UPGRADE_REQUIRED" });
+    await expect(project.create("plan-b", draft())).rejects.toMatchObject({ code: "FORMAT_UPGRADE_REQUIRED" });
+    expect(ipc).not.toHaveBeenCalled();
+    ipc.mockResolvedValueOnce(undefined);
+    await project.close({ discardFailedWrites: true });
+  });
+
+  it("upgrades the format through the native command, then writes format 2", async () => {
+    const backupPath = "D:\\Тест команды\\проект % #\\capacity-backup-format1-2026-10-06.sqlite";
+    ipc.mockResolvedValueOnce({ schemaVersion: 2, backupPath }).mockResolvedValueOnce([1, 0]);
+    const project = new ProjectSnapshots({ ...session, schemaVersion: 1 });
+    expect(await project.upgradeFormat()).toEqual({ schemaVersion: 2, backupPath });
+    expect(project.session.schemaVersion).toBe(2);
+    expect(ipc.mock.calls[0]).toEqual(["project_upgrade_format", { sessionKey: session.sessionKey }]);
+    const saved = await project.save("plan-a", 1, draft());
+    expect(saved.payloadVersion).toBe(2);
+    expect(ipc.mock.calls[1][1]).toMatchObject({ values: [JSON.stringify(draft()), "plan-a", 1, 2026, 2, 2] });
+  });
+
+  it("keeps format 1 when the native upgrade fails", async () => {
+    ipc.mockRejectedValueOnce(new Error("Не удалось создать резервную копию. Исходный файл не изменён."));
+    const project = new ProjectSnapshots({ ...session, schemaVersion: 1 });
+    await expect(project.upgradeFormat()).rejects.toThrow("Исходный файл не изменён");
+    expect(project.session.schemaVersion).toBe(1);
+    await expect(project.save("plan-a", 1, draft())).rejects.toMatchObject({ code: "FORMAT_UPGRADE_REQUIRED" });
+    expect(ipc).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects invalid input before any IPC write", async () => {
     const project = new ProjectSnapshots(session);
-    await expect(project.create("plan", { ...draft(), tasks: [{ id: "task", name: "X", directionId: "unknown", estimateHours: "-1" }] })).rejects.toMatchObject({ code: "INVALID_DATA" });
+    await expect(project.create("plan", { ...draft(), tasks: [{ id: "task", name: "X", directionId: "unknown", estimateHours: "-1", mark: "plan" as const, link: null, comment: null }] })).rejects.toMatchObject({ code: "INVALID_DATA" });
     await expect(project.save("plan", Number.MAX_SAFE_INTEGER, draft())).rejects.toMatchObject({ code: "INVALID_DATA" });
     expect(ipc).not.toHaveBeenCalled();
   });

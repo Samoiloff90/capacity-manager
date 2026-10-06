@@ -19,8 +19,8 @@ const source: QuarterSnapshot = {
     { id: "olga", name: "Ольга Новикова", competencyId: "java", fte: "0.5" }
   ],
   absences: [{ id: "vacation", memberId: "ivan", startDate: "2026-11-02", endDate: "2026-11-06" }],
-  directions: [{ id: "product", name: "Продукт", percent: "70" }, { id: "meetings", name: "Встречи", percent: "30" }],
-  tasks: [{ id: "task", name: "Онбординг", directionId: "product", estimateHours: "40" }]
+  directions: [{ id: "product", name: "Продукт", percent: "70", kind: "work" as const, memberPercents: [] }, { id: "meetings", name: "Встречи", percent: "30", kind: "work" as const, memberPercents: [] }],
+  tasks: [{ id: "task", name: "Онбординг", directionId: "product", estimateHours: "40", mark: "plan" as const, link: null, comment: null }]
 };
 
 describe("copying a saved quarter into a new period", () => {

@@ -18,7 +18,10 @@ export function copyQuarterSetup(source: QuarterSnapshot, base: NewQuarterBase):
     competencies: source.competencies.map(({ id, name }) => ({ id, name })),
     members: source.members.map(({ id, name, competencyId, fte }) => ({ id, name, competencyId, fte })),
     absences: [],
-    directions: source.directions.map(({ id, name, percent }) => ({ id, name, percent })),
+    // Own reserve shares refer to the same people, copied with the same ids.
+    directions: source.directions.map(({ id, name, percent, kind, memberPercents }) => ({
+      id, name, percent, kind, memberPercents: memberPercents.map(({ memberId, percent: own }) => ({ memberId, percent: own }))
+    })),
     tasks: []
   };
 }

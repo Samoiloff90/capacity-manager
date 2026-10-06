@@ -49,15 +49,20 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
     availableHours: decimalToString(hoursByCompetency.get(competency.id) ?? zero)
   }));
 
+  // A share not set yet adds nothing and leaves the allocation incomplete.
   let totalPercent = zero;
-  for (const direction of snapshot.directions) totalPercent = addDecimal(totalPercent, parseDecimal(direction.percent));
+  for (const direction of snapshot.directions) {
+    if (direction.percent !== null) totalPercent = addDecimal(totalPercent, parseDecimal(direction.percent));
+  }
   const percentComparison = compareDecimal(totalPercent, hundred);
-  const budgetComplete = percentComparison === 0;
+  const budgetComplete = percentComparison === 0 && snapshot.directions.every((direction) => direction.percent !== null);
   let totalKnownDemand = zero;
   let totalMissingEstimates = 0;
   const knownDemandByDirection = new Map<string, ExactDecimal>();
   const missingByDirection = new Map<string, number>();
+  // Only works in the quarter plan take the budget; candidates and «Не в этом квартале» do not (DEC-032).
   for (const task of snapshot.tasks) {
+    if (task.mark !== "plan") continue;
     if (task.estimateHours === null) {
       missingByDirection.set(task.directionId, (missingByDirection.get(task.directionId) ?? 0) + 1);
       totalMissingEstimates += 1;
@@ -68,7 +73,7 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
     }
   }
   const directions: QuarterDirectionCapacity[] = [...snapshot.directions].sort(byId).map((direction) => {
-    const budget = divideDecimalBy100(multiplyDecimal(totalHours, parseDecimal(direction.percent)));
+    const budget = direction.percent === null ? zero : divideDecimalBy100(multiplyDecimal(totalHours, parseDecimal(direction.percent)));
     const knownDemand = knownDemandByDirection.get(direction.id) ?? zero;
     const missingEstimateCount = missingByDirection.get(direction.id) ?? 0;
     const demandComplete = missingEstimateCount === 0;
@@ -91,7 +96,7 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
     members, competencies, directions,
     allocation: {
       totalPercent: decimalToString(totalPercent),
-      status: budgetComplete ? "complete" : percentComparison < 0 ? "underallocated" : "overallocated"
+      status: budgetComplete ? "complete" : percentComparison > 0 ? "overallocated" : "underallocated"
     },
     totals: {
       memberCount: members.length, workingDays: workingDates.length,

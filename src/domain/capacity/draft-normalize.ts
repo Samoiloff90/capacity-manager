@@ -15,7 +15,10 @@ export function normalizeSnapshotDecimals(snapshot: QuarterSnapshot): QuarterSna
   return {
     ...snapshot,
     members: snapshot.members.map((member) => ({ ...member, fte: canonical(member.fte) })),
-    directions: snapshot.directions.map((direction) => ({ ...direction, percent: canonical(direction.percent) })),
+    directions: snapshot.directions.map((direction) => ({
+      ...direction, percent: direction.percent === null ? null : canonical(direction.percent),
+      memberPercents: direction.memberPercents.map((row) => ({ ...row, percent: canonical(row.percent) }))
+    })),
     tasks: snapshot.tasks.map((task) => ({
       ...task, estimateHours: task.estimateHours === null ? null : canonical(task.estimateHours)
     }))

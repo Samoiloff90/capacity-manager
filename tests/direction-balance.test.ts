@@ -13,13 +13,13 @@ function snapshot(changes: Partial<QuarterSnapshot> = {}): QuarterSnapshot {
     competencies: [{ id: "dev", name: "Разработка" }],
     members: [{ id: "person", name: "Участник", competencyId: "dev", fte: "0.625" }],
     absences: [],
-    directions: [{ id: "product", name: "Продукт", percent: "20" }, { id: "reserve", name: "Встречи", percent: "80" }],
+    directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "reserve", name: "Встречи", percent: "80", kind: "work" as const, memberPercents: [] }],
     tasks: [], ...changes
   };
 }
 
 function task(id: string, estimateHours: string | null) {
-  return { id, name: `Задача ${id}`, directionId: "product", estimateHours };
+  return { id, name: `Задача ${id}`, directionId: "product", estimateHours, mark: "plan" as const, link: null, comment: null };
 }
 
 function calculate(changes: Partial<QuarterSnapshot> = {}): QuarterCapacityResult {
@@ -73,7 +73,7 @@ describe("direction balance presentation from exact engine results", () => {
     ["90", "20", "Предварительный остаток", false], ["90", "30", "Предварительный дефицит", true]
   ] as const)("keeps all balances preliminary with reserve share %s and known demand %s", (reserve, known, balanceLabel, deficit) => {
     const direction = product({
-      directions: [{ id: "product", name: "Продукт", percent: "20" }, { id: "reserve", name: "Резерв", percent: reserve }],
+      directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "reserve", name: "Резерв", percent: reserve, kind: "work" as const, memberPercents: [] }],
       tasks: [task("one", known)]
     });
     expect(direction.budgetComplete).toBe(false);
@@ -85,7 +85,7 @@ describe("direction balance presentation from exact engine results", () => {
 
   it("explains both invalid allocation and missing estimates together", () => {
     const description = describeDirectionBalance(product({
-      directions: [{ id: "product", name: "Продукт", percent: "20" }],
+      directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }],
       tasks: [task("known", "21"), task("blank", null)]
     }));
     expect(description).toMatchObject({
@@ -100,7 +100,7 @@ describe("direction balance presentation from exact engine results", () => {
       tasks: mode === "missing"
         ? [task("known", "20.0000000000000001"), task("blank", null)]
         : [task("known", "20.0000000000000001")],
-      ...(mode === "allocation" ? { directions: [{ id: "product", name: "Продукт", percent: "20" }] } : {})
+      ...(mode === "allocation" ? { directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }] } : {})
     };
     const description = describeDirectionBalance(product(changes));
     expect(description.balanceText).toBe("<0,01 ч");
@@ -153,7 +153,7 @@ describe("balance cells on screen", () => {
       balance: { label: "Дефицит не менее", text: "10 ч" }
     });
     const allocation = describeScreenBalanceCells(product({
-      directions: [{ id: "product", name: "Продукт", percent: "20" }], tasks: [task("one", "10")]
+      directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }], tasks: [task("one", "10")]
     }), formatScreenHours);
     expect(allocation.balance).toEqual({ label: "Предварительный остаток", text: "10 ч" });
   });

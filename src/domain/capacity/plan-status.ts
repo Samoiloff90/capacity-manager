@@ -11,7 +11,9 @@ export function describeQuarterPlanStatus(
 ): QuarterPlanStatus {
   const reasons: string[] = [];
   if (!result.directions.length) reasons.push("Направления не заданы.");
-  else if (result.allocation.status !== "complete") {
+  else if (result.directions.some((direction) => direction.percent === null)) {
+    reasons.push("Доля задана не у всех направлений.");
+  } else if (result.allocation.status !== "complete") {
     reasons.push(`Сумма долей направлений ${result.allocation.totalPercent.replace(".", ",")}% вместо 100%.`);
   }
   if (result.totals.missingEstimateCount > 0) reasons.push(`Задач без оценки: ${result.totals.missingEstimateCount}.`);

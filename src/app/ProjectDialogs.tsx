@@ -82,6 +82,29 @@ export function NewQuarterDialog({ plans, onCancel, onCreate }: {
   </div>;
 }
 
+/** Before the first save of a project made by 0.1.0–0.3.0 (DEC-044). Cancel leaves the file as it was. */
+export function FormatUpgradeDialog({ message, folderPath, onAnswer }: {
+  message: string; folderPath: string; onAnswer: (confirmed: boolean) => void;
+}) {
+  const dialog = useRef<HTMLDivElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useDialogFocus(dialog, cancel, () => onAnswer(false));
+  return <div className="project-modal-backdrop">
+    <div ref={dialog} className="project-modal" role="alertdialog" aria-modal="true" aria-labelledby="format-upgrade-title" aria-describedby="format-upgrade-message">
+      <h2 id="format-upgrade-title">Обновить формат проекта</h2>
+      <div id="format-upgrade-message" className="project-stack">
+        <p>{message}</p>
+        <p>Копия появится в папке проекта: <span className="project-path-inline">{folderPath.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "")}</span></p>
+        <p className="project-muted">Если отменить, файл проекта не изменится. Несохранённые изменения, если они есть, останутся в окне.</p>
+      </div>
+      <div className="project-actions project-dialog-actions">
+        <button ref={cancel} className="secondary" type="button" onClick={() => onAnswer(false)}>Отмена</button>
+        <button type="button" onClick={() => onAnswer(true)}>Обновить формат и сохранить</button>
+      </div>
+    </div>
+  </div>;
+}
+
 export function DiscardDialog({ message, canSave, onAnswer }: {
   message: string; canSave: boolean; onAnswer: (answer: DiscardAnswer) => void;
 }) {

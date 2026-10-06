@@ -18,19 +18,19 @@ describe("quarter plan status", () => {
     ["90.5", "Сумма долей направлений 90,5% вместо 100%."]
   ])("reports an allocation of %s%%", (reserve, reason) => {
     const snapshot = readmeQuarter({ directions: [
-      { id: "z-product", name: "Продукт", percent: "20" },
-      { id: "a-meetings", name: "Встречи и прочее", percent: String(Number(reserve) - 20) }
+      { id: "z-product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] },
+      { id: "a-meetings", name: "Встречи и прочее", percent: String(Number(reserve) - 20), kind: "work" as const, memberPercents: [] }
     ] });
     expect(describeQuarterPlanStatus(calculate(snapshot))).toEqual({ ready: false, reasons: [reason] });
   });
 
   it("counts tasks without an estimate and combines reasons in a fixed order", () => {
     const snapshot = readmeQuarter({
-      directions: [{ id: "z-product", name: "Продукт", percent: "20" }],
+      directions: [{ id: "z-product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }],
       tasks: [
-        { id: "t1", name: "A", directionId: "z-product", estimateHours: null },
-        { id: "t2", name: "B", directionId: "z-product", estimateHours: null },
-        { id: "t3", name: "C", directionId: "z-product", estimateHours: "0" }
+        { id: "t1", name: "A", directionId: "z-product", estimateHours: null, mark: "plan" as const, link: null, comment: null },
+        { id: "t2", name: "B", directionId: "z-product", estimateHours: null, mark: "plan" as const, link: null, comment: null },
+        { id: "t3", name: "C", directionId: "z-product", estimateHours: "0", mark: "plan" as const, link: null, comment: null }
       ]
     });
     expect(describeQuarterPlanStatus(calculate(snapshot))).toEqual({

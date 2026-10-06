@@ -12,13 +12,13 @@ function totals(changes: Partial<QuarterSnapshot> = {}) {
     competencies: [{ id: "dev", name: "Разработка" }],
     members: [{ id: "person", name: "Участник", competencyId: "dev", fte: "0.625" }],
     absences: [],
-    directions: [{ id: "product", name: "Продукт", percent: "20" }, { id: "support", name: "Поддержка", percent: "80" }],
+    directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "support", name: "Поддержка", percent: "80", kind: "work" as const, memberPercents: [] }],
     tasks: [], ...changes
   });
   if (!result.ok) throw new Error(JSON.stringify(result.errors));
   return describeQuarterTotals(result.result);
 }
-const task = (id: string, directionId: string, estimateHours: string | null) => ({ id, name: id, directionId, estimateHours });
+const task = (id: string, directionId: string, estimateHours: string | null) => ({ id, name: id, directionId, estimateHours, mark: "plan" as const, link: null, comment: null });
 
 describe("quarter totals for the summary strip", () => {
   it("subtracts the known demand from the available hours exactly", () => {

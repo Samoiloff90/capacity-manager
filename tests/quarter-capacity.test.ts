@@ -17,7 +17,7 @@ function snapshot(changes: Partial<QuarterSnapshot> = {}): QuarterSnapshot {
     competencies: [{ id: "development", name: "Разработка" }],
     members: [{ id: "a", name: "А", competencyId: "development", fte: "1" }],
     absences: [],
-    directions: [{ id: "product", name: "Продукт", percent: "20" }, { id: "meetings", name: "Встречи", percent: "80" }],
+    directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "meetings", name: "Встречи", percent: "80", kind: "work" as const, memberPercents: [] }],
     tasks: [],
     ...changes
   };
@@ -56,8 +56,8 @@ describe("quarter capacity", () => {
         { id: "absence-b", memberId: "b", startDate: "2026-01-01", endDate: "2026-01-04" }
       ],
       tasks: [
-        { id: "one", name: "Первая", directionId: "product", estimateHours: "30" },
-        { id: "two", name: "Вторая", directionId: "product", estimateHours: "20" }
+        { id: "one", name: "Первая", directionId: "product", estimateHours: "30", mark: "plan" as const, link: null, comment: null },
+        { id: "two", name: "Вторая", directionId: "product", estimateHours: "20", mark: "plan" as const, link: null, comment: null }
       ]
     }));
     expect(result.members.map((member) => member.availableHours)).toEqual(["144", "64"]);
@@ -141,7 +141,7 @@ describe("quarter capacity", () => {
     const changes: Partial<QuarterSnapshot> = scenario === "empty-team" ? { members: [] }
       : scenario === "no-working-dates" ? { calendar: calendar(2026, 1, []) }
       : { absences: [{ id: "all", memberId: "a", startDate: "2026-01-01", endDate: "2026-03-31" }] };
-    const result = calculate(snapshot({ ...changes, tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "12" }] }));
+    const result = calculate(snapshot({ ...changes, tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "12", mark: "plan" as const, link: null, comment: null }] }));
     expect(result.totals.availableHours).toBe("0");
     expect(result.directions.find((direction) => direction.directionId === "product")).toMatchObject({ budgetHours: "0", overrunKnownHours: "12", confirmedRemainingHours: "-12" });
     expect(JSON.stringify(result)).not.toMatch(/NaN|Infinity/);
@@ -149,8 +149,8 @@ describe("quarter capacity", () => {
 
   it("keeps a zero-share direction with tasks as a visible deficit", () => {
     const result = calculate(snapshot({
-      directions: [{ id: "product", name: "Продукт", percent: "0" }, { id: "meetings", name: "Встречи", percent: "100" }],
-      tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "1" }]
+      directions: [{ id: "product", name: "Продукт", percent: "0", kind: "work" as const, memberPercents: [] }, { id: "meetings", name: "Встречи", percent: "100", kind: "work" as const, memberPercents: [] }],
+      tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "1", mark: "plan" as const, link: null, comment: null }]
     }));
     expect(result.directions.find((direction) => direction.directionId === "product")?.overrunKnownHours).toBe("1");
     expect(result.directions.find((direction) => direction.directionId === "meetings")?.budgetHours).toBe("160");
@@ -160,8 +160,8 @@ describe("quarter capacity", () => {
 describe("exact allocation and result completeness", () => {
   it("distinguishes an exact 100% sum from 99.999999% without epsilon", () => {
     const directions = [
-      { id: "a", name: "А", percent: "33.333333" }, { id: "b", name: "Б", percent: "33.333333" },
-      { id: "c", name: "В", percent: "33.333334" }
+      { id: "a", name: "А", percent: "33.333333", kind: "work" as const, memberPercents: [] }, { id: "b", name: "Б", percent: "33.333333", kind: "work" as const, memberPercents: [] },
+      { id: "c", name: "В", percent: "33.333334", kind: "work" as const, memberPercents: [] }
     ];
     const complete = calculate(snapshot({ directions }));
     expect(complete.allocation).toEqual({ totalPercent: "100", status: "complete" });
@@ -172,7 +172,7 @@ describe("exact allocation and result completeness", () => {
   });
 
   it.each([["70", "90", "underallocated"], ["90", "110", "overallocated"]])("keeps a %s%% reserve as a draft without renormalizing", (reserve, totalPercent, status) => {
-    const draft = snapshot({ directions: [{ id: "product", name: "Продукт", percent: "20" }, { id: "meetings", name: "Встречи", percent: reserve }] });
+    const draft = snapshot({ directions: [{ id: "product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "meetings", name: "Встречи", percent: reserve, kind: "work" as const, memberPercents: [] }] });
     const result = calculate(draft);
     expect(result.allocation).toEqual({ totalPercent, status });
     expect(result.directions.find((direction) => direction.directionId === "product")).toMatchObject({
@@ -183,9 +183,9 @@ describe("exact allocation and result completeness", () => {
 
   it("keeps null estimates distinct from zero and limits incompleteness to the affected direction", () => {
     const result = calculate(snapshot({ tasks: [
-      { id: "missing", name: "Без оценки", directionId: "product", estimateHours: null },
-      { id: "known", name: "С оценкой", directionId: "product", estimateHours: "10" },
-      { id: "zero", name: "Явный ноль", directionId: "meetings", estimateHours: "0" }
+      { id: "missing", name: "Без оценки", directionId: "product", estimateHours: null, mark: "plan" as const, link: null, comment: null },
+      { id: "known", name: "С оценкой", directionId: "product", estimateHours: "10", mark: "plan" as const, link: null, comment: null },
+      { id: "zero", name: "Явный ноль", directionId: "meetings", estimateHours: "0", mark: "plan" as const, link: null, comment: null }
     ] }));
     expect(result.directions.find((direction) => direction.directionId === "product")).toMatchObject({
       knownDemandHours: "10", missingEstimateCount: 1, budgetComplete: true, demandComplete: false,
@@ -199,8 +199,8 @@ describe("exact allocation and result completeness", () => {
 
   it("preserves a known overrun even when another task estimate is missing", () => {
     const result = calculate(snapshot({ tasks: [
-      { id: "known", name: "С оценкой", directionId: "product", estimateHours: "40" },
-      { id: "missing", name: "Без оценки", directionId: "product", estimateHours: null }
+      { id: "known", name: "С оценкой", directionId: "product", estimateHours: "40", mark: "plan" as const, link: null, comment: null },
+      { id: "missing", name: "Без оценки", directionId: "product", estimateHours: null, mark: "plan" as const, link: null, comment: null }
     ] }));
     expect(result.directions.find((direction) => direction.directionId === "product")).toMatchObject({
       remainingKnownHours: "-8", overrunKnownHours: "8", balanceComplete: false, confirmedRemainingHours: null
@@ -211,14 +211,14 @@ describe("exact allocation and result completeness", () => {
     const result = calculate(snapshot({ members: [{ id: "a", name: "А", competencyId: "development", fte: "0.1234567890123456789" }] }));
     expect(result.totals.availableHours).toBe("19.753086241975308624");
     expect(result.directions.find((direction) => direction.directionId === "product")?.budgetHours).toBe("3.9506172483950617248");
-    const deficit = calculate(snapshot({ tasks: [{ id: "tiny", name: "Работа", directionId: "product", estimateHours: "32.0001" }] }));
+    const deficit = calculate(snapshot({ tasks: [{ id: "tiny", name: "Работа", directionId: "product", estimateHours: "32.0001", mark: "plan" as const, link: null, comment: null }] }));
     expect(deficit.directions.find((direction) => direction.directionId === "product")?.overrunKnownHours).toBe("0.0001");
   });
 
   it("sums estimates beyond Number precision exactly and returns JSON-safe strings", () => {
     const result = calculate(snapshot({ tasks: [
-      { id: "large", name: "Большая", directionId: "product", estimateHours: "1000000000000000000000000.01" },
-      { id: "small", name: "Маленькая", directionId: "product", estimateHours: "0.02" }
+      { id: "large", name: "Большая", directionId: "product", estimateHours: "1000000000000000000000000.01", mark: "plan" as const, link: null, comment: null },
+      { id: "small", name: "Маленькая", directionId: "product", estimateHours: "0.02", mark: "plan" as const, link: null, comment: null }
     ] }));
     expect(result.totals.knownDemandHours).toBe("1000000000000000000000000.03");
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
@@ -265,13 +265,13 @@ describe("snapshot validation, determinism and isolation", () => {
     expectInvalid(snapshot({ absences: [{ id: "bad", memberId: "a", startDate: "2026-01-03", endDate: "2026-01-02" }] }), "absences.0.endDate");
     expectInvalid(snapshot({ absences: [{ id: "bad", memberId: "unknown", startDate: "2026-01-01", endDate: "2026-01-02" }] }), "absences.0.memberId");
     expectInvalid(snapshot({ members: [{ id: "a", name: "А", competencyId: "unknown", fte: "1" }] }), "members.0.competencyId");
-    expectInvalid(snapshot({ tasks: [{ id: "bad", name: "Работа", directionId: "unknown", estimateHours: "1" }] }), "tasks.0.directionId");
+    expectInvalid(snapshot({ tasks: [{ id: "bad", name: "Работа", directionId: "unknown", estimateHours: "1", mark: "plan" as const, link: null, comment: null }] }), "tasks.0.directionId");
   });
 
   it.each(["competencies", "members", "absences", "directions", "tasks"] as const)("rejects duplicate IDs in %s", (field) => {
     const base = snapshot({
       absences: [{ id: "absence", memberId: "a", startDate: "2026-01-01", endDate: "2026-01-02" }],
-      tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "1" }]
+      tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "1", mark: "plan" as const, link: null, comment: null }]
     });
     expectInvalid({ ...base, [field]: [base[field][0], base[field][0]] }, `${field}.1.id`);
   });
@@ -281,25 +281,25 @@ describe("snapshot validation, determinism and isolation", () => {
   });
 
   it.each(["-0.1", "100.0001", "invalid"])("rejects invalid individual percent %s", (percent) => {
-    expectInvalid(snapshot({ directions: [{ id: "product", name: "Продукт", percent }] }), "directions.0.percent");
+    expectInvalid(snapshot({ directions: [{ id: "product", name: "Продукт", percent, kind: "work" as const, memberPercents: [] }] }), "directions.0.percent");
   });
 
   it.each(["", "-0.001", "Infinity", undefined])("does not silently replace invalid estimate %s with zero or null", (estimateHours) => {
-    expectInvalid({ ...snapshot(), tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours }] }, "tasks.0.estimateHours");
+    expectInvalid({ ...snapshot(), tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours, mark: "plan" as const, link: null, comment: null }] }, "tasks.0.estimateHours");
   });
 
   it("rejects malformed structures, empty names, unknown fields and technical oversize payloads", () => {
     for (const input of [null, [], "plan", {}, { ...snapshot(), year: 10000 }, { ...snapshot(), quarter: 5 }]) expectInvalid(input);
     expectInvalid(snapshot({ members: [{ id: "", name: " ", competencyId: "development", fte: "1" }] }));
     expectInvalid({ ...snapshot(), productiveRatio: "0.7" });
-    expectInvalid(snapshot({ tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "1".repeat(QUARTER_INPUT_LIMITS.decimalCharacters + 1) }] }));
+    expectInvalid(snapshot({ tasks: [{ id: "task", name: "Работа", directionId: "product", estimateHours: "1".repeat(QUARTER_INPUT_LIMITS.decimalCharacters + 1), mark: "plan" as const, link: null, comment: null }] }));
     expectInvalid({ ...snapshot(), members: Array(QUARTER_INPUT_LIMITS.entitiesPerCollection + 1).fill(null) }, "members");
   });
 
   it("is independent of row order, accepts frozen inputs and never changes the input", () => {
     const base = snapshot({
       members: [{ id: "b", name: "Б", competencyId: "development", fte: "0.5" }, ...snapshot().members],
-      tasks: [{ id: "two", name: "Два", directionId: "product", estimateHours: "0.2" }, { id: "one", name: "Один", directionId: "product", estimateHours: "0.1" }]
+      tasks: [{ id: "two", name: "Два", directionId: "product", estimateHours: "0.2", mark: "plan" as const, link: null, comment: null }, { id: "one", name: "Один", directionId: "product", estimateHours: "0.1", mark: "plan" as const, link: null, comment: null }]
     });
     const serialized = JSON.stringify(base);
     const expected = calculate(freezeDeep(base));

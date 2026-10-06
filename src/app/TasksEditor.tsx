@@ -22,7 +22,8 @@ export function TasksEditor({ snapshot, update, onGoToAllocation }: TasksEditorP
       const direction = current.directions[0];
       if (!direction) return current;
       return { ...current, tasks: [...current.tasks, {
-        id: crypto.randomUUID(), name: "", directionId: direction.id, estimateHours: null
+        id: crypto.randomUUID(), name: "", directionId: direction.id, estimateHours: null,
+        mark: "plan", link: null, comment: null
       }] };
     });
   }

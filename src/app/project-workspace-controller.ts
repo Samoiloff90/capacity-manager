@@ -1,4 +1,4 @@
-import { createProject, openProject, type ProjectSession, type StoredQuarterPlan } from "../db/project-snapshots";
+import { createProject, openProject, PROJECT_SCHEMA_VERSION, type FormatUpgrade, type ProjectSession, type StoredQuarterPlan } from "../db/project-snapshots";
 import type { Quarter } from "../domain/capacity/calendar-quarter";
 import { createQuarterCalendar, type CalendarMode } from "../domain/capacity/project-calendar";
 import { normalizeSnapshotDecimals } from "../domain/capacity/draft-normalize";
@@ -22,11 +22,17 @@ export function quarterTitle(period: { year: number; quarter: Quarter }): string
   return `${period.quarter} квартал ${period.year} года`;
 }
 
+/** The PO's warning before the first save of a project made by 0.1.0–0.3.0 (DEC-044). */
+export const FORMAT_UPGRADE_MESSAGE = "После обновления формата этот файл нельзя будет открыть в версии 0.3.0. "
+  + "Перед сохранением будет создана резервная копия исходного проекта.";
+
 export interface WorkspaceRepository {
   readonly session: Readonly<ProjectSession>;
   list(): Promise<StoredQuarterPlan[]>;
   create(planId: string, input: unknown): Promise<StoredQuarterPlan>;
   save(planId: string, expectedRevision: number, input: unknown): Promise<StoredQuarterPlan>;
+  /** Backup, then format 1 → 2; the file is unchanged if this fails. */
+  upgradeFormat(): Promise<FormatUpgrade>;
   close(options?: { discardFailedWrites?: boolean }): Promise<void>;
   rename(name: string): Promise<Readonly<ProjectSession>>;
 }
@@ -44,6 +50,8 @@ export interface WorkspaceState {
   calculation: CalculateQuarterCapacityResult | null;
   /** canSave: the dialog may offer "Сохранить и продолжить". */
   confirmation: { message: string; canSave: boolean } | null;
+  /** Asked before the first write to a project of format 1; folderPath is where the backup goes. */
+  formatUpgrade: { message: string; folderPath: string } | null;
   /** Whether the saved quarter can be exported; hint explains why not. */
   report: { available: boolean; hint: string };
 }
@@ -58,6 +66,7 @@ interface Dependencies {
   renderReport: (report: QuarterReport) => Promise<Uint8Array>;
   saveReportFile: (defaultName: string, bytes: Uint8Array) => Promise<ReportSaveOutcome>;
   confirmDiscard?: (message: string, canSave: boolean) => Promise<DiscardAnswer>;
+  confirmFormatUpgrade?: (message: string, folderPath: string) => Promise<boolean>;
   readSelectedPlan?: (projectId: string) => string | null;
   writeSelectedPlan?: (projectId: string, planId: string) => void;
 }
@@ -65,7 +74,7 @@ interface Dependencies {
 function emptyState(): WorkspaceState {
   return { project: null, plans: [], activePlanId: null, draft: null, dirty: false,
     busy: false, closeProtectionReady: true, error: "", notice: "", calculation: null, confirmation: null,
-    report: { available: false, hint: "" } };
+    formatUpgrade: null, report: { available: false, hint: "" } };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function projectName(name: string): string {
@@ -87,6 +96,7 @@ export class ProjectWorkspaceController {
   private operation: Promise<boolean> | null = null;
   private operationKind: "save" | "transition" | "export" | null = null;
   private resolveDiscard: ((answer: DiscardAnswer) => void) | null = null;
+  private resolveFormatUpgrade: ((confirmed: boolean) => void) | null = null;
   // Set while closeProject waits for a running operation: a folder picked meanwhile is not opened.
   private closeRequested = false;
   // Keyed by the stored plan object: list/save always replace it with a new one.
@@ -134,6 +144,7 @@ export class ProjectWorkspaceController {
   private run(kind: "save" | "transition" | "export", task: () => Promise<boolean>): Promise<boolean> {
     if (this.operation || !this.state.closeProtectionReady) return Promise.resolve(false);
     this.operationKind = kind;
+    this.upgradeNotice = "";
     this.publish({ busy: true, error: "", notice: "" });
     const pending = Promise.resolve().then(task).catch((error: unknown) => {
       this.publish({ error: errorMessage(error) });
@@ -164,13 +175,41 @@ export class ProjectWorkspaceController {
       });
     if (answer !== "save") return answer;
     if (!canSave) return false;
-    await this.persistDraft();
+    // Declining the format upgrade cancels the transition too: nothing was saved.
+    if (!await this.persistDraft()) return false;
     // Named, because the next screen may be another quarter or project.
-    if (saved) this.publish({ notice: `Изменения квартала «${quarterTitle(saved.snapshot)}» сохранены.` });
+    if (saved) this.publish({ notice: `${this.upgradeNotice}Изменения квартала «${quarterTitle(saved.snapshot)}» сохранены.` });
     return true;
   }
 
-  private async persistDraft(): Promise<void> {
+  // Set by ensureCurrentFormat within one operation and shown with that operation's result.
+  private upgradeNotice = "";
+
+  /**
+   * Before the first write to a project of format 1: the user confirms, the native store makes and
+   * checks a backup, then upgrades the file. False when declined; the file stays as it was.
+   */
+  private async ensureCurrentFormat(): Promise<boolean> {
+    const repository = this.repository;
+    if (!repository || repository.session.schemaVersion === PROJECT_SCHEMA_VERSION) return true;
+    const folderPath = repository.session.folderPath;
+    const confirmed = this.deps.confirmFormatUpgrade
+      ? await this.deps.confirmFormatUpgrade(FORMAT_UPGRADE_MESSAGE, folderPath)
+      : await new Promise<boolean>((resolve) => {
+        this.resolveFormatUpgrade = resolve;
+        this.publish({ formatUpgrade: { message: FORMAT_UPGRADE_MESSAGE, folderPath } });
+      });
+    if (!confirmed) return false;
+    const upgrade = await repository.upgradeFormat();
+    this.upgradeNotice = upgrade.backupPath
+      ? `Формат проекта обновлён. Резервная копия исходного проекта: ${upgrade.backupPath}. ` : "";
+    // Shown at once: if the write after it fails, the error must not hide where the backup is.
+    this.publish({ project: clone(repository.session), notice: this.upgradeNotice.trim() });
+    return true;
+  }
+
+  /** False when the format upgrade was declined: nothing was written. */
+  private async persistDraft(): Promise<boolean> {
     const { draft, activePlanId } = this.state;
     const saved = this.state.plans.find((plan) => plan.planId === activePlanId);
     if (!this.repository || !draft || !saved) throw new Error("Сначала выберите квартал.");
@@ -182,11 +221,13 @@ export class ProjectWorkspaceController {
       throw new Error(`Не удалось сохранить. ${first ? describeValidationIssue(first) : "Проверьте введённые данные."}`);
     }
     if (captured.year !== saved.snapshot.year || captured.quarter !== saved.snapshot.quarter) throw new Error("Период существующего плана нельзя изменить.");
+    if (!await this.ensureCurrentFormat()) return false;
     const stored = clone(await this.repository.save(saved.planId, saved.revision, captured));
     // Show the normalized values unless the draft was edited while saving.
     const normalized = this.state.draft === draft ? { draft: clone(captured), calculation: calculateQuarterCapacity(captured) } : {};
     this.publish({ plans: this.state.plans.map((plan) => plan.planId === stored.planId ? stored : plan), ...normalized });
-    this.publish({ notice: this.state.dirty ? "Расчёт сохранён. Более поздние изменения ещё не сохранены." : "Расчёт сохранён в папке проекта." });
+    this.publish({ notice: this.upgradeNotice + (this.state.dirty ? "Расчёт сохранён. Более поздние изменения ещё не сохранены." : "Расчёт сохранён в папке проекта.") });
+    return true;
   }
 
   private select(plan: StoredQuarterPlan | undefined) {
@@ -222,7 +263,8 @@ export class ProjectWorkspaceController {
       await this.repository?.close({ discardFailedWrites: true });
       this.repository = candidate;
       this.pendingForms.clear();
-      this.publish({ project: clone(candidate.session), plans, notice: "" });
+      // A backup made while saving the previous project stays named until the user reads it.
+      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim() });
       let preference: string | null = null;
       try { preference = this.deps.readSelectedPlan?.(candidate.session.projectId) ?? null; }
       catch { /* Optional application-local preference. */ }
@@ -267,7 +309,7 @@ export class ProjectWorkspaceController {
         await this.repository?.close({ discardFailedWrites: true });
         this.repository = null;
         this.pendingForms.clear();
-        this.publish({ ...emptyState(), busy: true });
+        this.publish({ ...emptyState(), busy: true, notice: this.upgradeNotice.trim() });
         return true;
       });
     },
@@ -302,18 +344,17 @@ export class ProjectWorkspaceController {
         competencies: ["SA", "BPMN", "Frontend", "Java", "Python", "QA"].map((name) => ({ id: this.deps.id(), name })),
         members: [], absences: [], directions: [], tasks: []
       };
+      // A new quarter is written at once, so a project of format 1 is upgraded first.
+      if (!await this.ensureCurrentFormat()) return false;
       const stored = clone(await this.repository.create(this.deps.id(), snapshot));
       this.publish({ plans: [...this.state.plans, stored] });
       this.select(stored);
-      this.publish({ notice: source
+      this.publish({ notice: this.upgradeNotice + (source
         ? `Квартал создан. Из квартала «${quarterTitle(source.snapshot)}» скопированы сотрудники, ставки, компетенции и направления; добавьте отсутствия и задачи.`
-        : "Квартал создан. Заполните команду и сохраните расчёт." });
+        : "Квартал создан. Заполните команду и сохраните расчёт.") });
       return true;
     }),
-    save: (): Promise<boolean> => this.run("save", async () => {
-      await this.persistDraft();
-      return true;
-    }),
+    save: (): Promise<boolean> => this.run("save", () => this.persistDraft()),
     /** Exports the saved quarter; the native command shows "Save as". Cancelling is not an error. */
     exportReport: (): Promise<boolean> => this.run("export", async () => {
       const { report: availability, saved, result } = this.reportAvailability();
@@ -357,6 +398,12 @@ export class ProjectWorkspaceController {
       this.resolveDiscard = null;
       this.publish({ confirmation: null });
       resolve?.(answer);
+    },
+    answerFormatUpgrade: (confirmed: boolean): void => {
+      const resolve = this.resolveFormatUpgrade;
+      this.resolveFormatUpgrade = null;
+      this.publish({ formatUpgrade: null });
+      resolve?.(confirmed);
     },
     clearMessage: (): void => this.publish({ error: "", notice: "" }),
     setCloseProtectionReady: (ready: boolean): void => this.publish({ closeProtectionReady: ready }),

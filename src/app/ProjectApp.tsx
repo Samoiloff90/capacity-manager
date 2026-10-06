@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { useProjectWorkspace } from "./project-workspace";
 import { PROJECT_NAME_FORM } from "./project-workspace-controller";
-import { DiscardDialog, NewQuarterDialog } from "./ProjectDialogs";
+import { DiscardDialog, FormatUpgradeDialog, NewQuarterDialog } from "./ProjectDialogs";
 import { DeleteButton, InfoHint, PencilIcon, restoreFocus } from "./project-ui";
 import { TasksEditor } from "./TasksEditor";
 import { describeValidationIssue } from "./validation-text";
@@ -88,7 +88,7 @@ export default function ProjectApp() {
   // the cursor returns there after saving. The team-name form is saved by its own button.
   const saveFromKeyboard = useRef<() => void>(() => undefined);
   saveFromKeyboard.current = () => {
-    if (disabled || state.confirmation || creatingQuarter || renaming || !state.draft || !state.dirty) return;
+    if (disabled || state.confirmation || state.formatUpgrade || creatingQuarter || renaming || !state.draft || !state.dirty) return;
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     focused?.blur();
     void actions.save().finally(() => restoreFocus(focused));
@@ -103,7 +103,7 @@ export default function ProjectApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const modalOpen = Boolean(state.confirmation) || (creatingQuarter && Boolean(state.project));
+  const modalOpen = Boolean(state.confirmation) || Boolean(state.formatUpgrade) || (creatingQuarter && Boolean(state.project));
   useEffect(() => { page.current?.toggleAttribute("inert", modalOpen); }, [modalOpen]);
 
   async function chooseProject(create: boolean) {
@@ -151,7 +151,7 @@ export default function ProjectApp() {
     {state.notice && <div className="project-message" role="status">{state.notice}</div>}
   </>;
 
-  const status = state.confirmation ? "Ожидает решения" : state.busy ? "Выполняем…"
+  const status = state.confirmation || state.formatUpgrade ? "Ожидает решения" : state.busy ? "Выполняем…"
     : unsaved ? "Есть несохранённые изменения" : "Все изменения сохранены";
 
   return <div className="project-app"><div ref={page} className="project-page">
@@ -198,7 +198,7 @@ export default function ProjectApp() {
           </div>}
           <div className="project-path" title="Папка проекта">{state.project.folderPath.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "")}</div>
         </div>
-        <span className={`project-status ${state.confirmation || unsaved ? "dirty" : "saved"}`} role="status">{status}</span>
+        <span className={`project-status ${state.confirmation || state.formatUpgrade || unsaved ? "dirty" : "saved"}`} role="status">{status}</span>
         <button type="button" className="project-save-button" data-shortcut={saveShortcut} disabled={disabled || !state.draft || !state.dirty}
           aria-label="Сохранить квартал" aria-keyshortcuts={isMac ? "Meta+S" : "Control+S"}
           title={`Сохранить квартал (${saveShortcut})`} onClick={() => { void actions.save(); }}>Сохранить квартал</button>
@@ -256,6 +256,8 @@ export default function ProjectApp() {
     {creatingQuarter && state.project && <NewQuarterDialog plans={state.plans} onCancel={() => setCreatingQuarter(false)}
       onCreate={(year, quarter, mode, copyFrom) => { void createQuarter(year, quarter, mode, copyFrom); }} />}
     {state.confirmation && <DiscardDialog message={state.confirmation.message} canSave={state.confirmation.canSave} onAnswer={actions.answerDiscard} />}
+    {state.formatUpgrade && <FormatUpgradeDialog message={state.formatUpgrade.message} folderPath={state.formatUpgrade.folderPath}
+      onAnswer={actions.answerFormatUpgrade} />}
   </div>;
 }
 
@@ -491,7 +493,7 @@ function AllocationEditor({ snapshot, update, result }: EditorProps) {
   }));
   return <>
     <SectionHeading title="Распределение часов" note="Доли применяются ко всем доступным часам команды; встречи — отдельное направление">
-      <button type="button" onClick={() => update((current) => ({ ...current, directions: [...current.directions, { id: newId(), name: "", percent: "0" }] }))}>Добавить направление</button>
+      <button type="button" onClick={() => update((current) => ({ ...current, directions: [...current.directions, { id: newId(), name: "", percent: "0", kind: "work", memberPercents: [] }] }))}>Добавить направление</button>
     </SectionHeading>
     <AllocationWarning snapshot={snapshot} result={result} />
     <div className="data-table-wrap"><table className="project-table"><thead><tr><th>Направление</th><th>Доля, % <InfoHint info="share" /></th><th className="project-number">Бюджет часов</th><th className="project-row-action"><span className="visually-hidden">Действия</span></th>
@@ -501,9 +503,11 @@ function AllocationEditor({ snapshot, update, result }: EditorProps) {
         const used = snapshot.tasks.some((task) => task.directionId === direction.id);
         return <tr key={direction.id}>
           <td><input className="project-wide-input" aria-label={`Название направления ${index + 1}`} value={direction.name} maxLength={1000} placeholder="Продукт, встречи, техдолг…" onChange={(event) => setDirection(direction.id, { name: event.target.value })} /></td>
-          <td><input className="project-decimal-input" aria-label={`Доля направления ${index + 1}`} inputMode="decimal" value={numberText(direction.percent)}
+          <td><input className="project-decimal-input" aria-label={`Доля направления ${index + 1}`} inputMode="decimal" value={numberText(direction.percent ?? "")}
             onChange={(event) => setDirection(direction.id, { percent: event.target.value.replace(",", ".") })}
             onBlur={(event) => {
+              // A share not set yet stays «не задана» when the empty field loses focus.
+              if (direction.percent === null && event.target.value.trim() === "") return;
               const value = finishDecimal(event.target.value);
               if (value !== direction.percent) setDirection(direction.id, { percent: value });
             }} /></td>
