@@ -189,10 +189,14 @@ async function replaceQuarter(update) {
     db: window.__smokeSession.sessionKey, query: 'SELECT plan_id, payload_json, revision FROM quarter_plans', values: []
   })`);
   assert.equal(rows.length, 1);
-  const snapshot = update(JSON.parse(rows[0].payload_json));
+  const changed = update(JSON.parse(rows[0].payload_json));
+  // Quarter JSON of format 2 (DEC-044): every direction and task carries its new fields.
+  const snapshot = { ...changed,
+    directions: changed.directions.map((item) => ({ kind: "work", memberPercents: [], ...item })),
+    tasks: changed.tasks.map((item) => ({ mark: "plan", link: null, comment: null, ...item })) };
   const result = await evaluate(`window.__TAURI_INTERNALS__.invoke('plugin:sql|execute', {
     db: window.__smokeSession.sessionKey,
-    query: 'UPDATE quarter_plans SET payload_json = $1, revision = revision + 1 WHERE plan_id = $2 AND revision = $3',
+    query: 'UPDATE quarter_plans SET payload_json = $1, payload_version = 2, revision = revision + 1 WHERE plan_id = $2 AND revision = $3',
     values: [${JSON.stringify(JSON.stringify(snapshot))}, ${JSON.stringify(rows[0].plan_id)}, ${rows[0].revision}]
   })`);
   assert.equal(result[0], 1, "Exactly one quarter updated");
