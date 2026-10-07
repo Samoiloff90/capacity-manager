@@ -252,3 +252,19 @@ export function parseShareInput(input: string): ShareInput {
 export function sameOnScreen(left: string, right: string): boolean {
   return roundDecimal(left, 2) === roundDecimal(right, 2);
 }
+
+/** «Не распределено станет …» when a source's quota changes from its current value to `quota`. */
+export function unallocatedAfter(result: Pick<QuarterCapacityResult, "plan" | "directions">, sourceId: string, quota: string): string {
+  const current = result.directions.find((row) => row.directionId === sourceId);
+  const before = current?.quotaSet ? parseDecimal(current.budgetHours) : zero;
+  return decimalToString(subtractDecimal(addDecimal(parseDecimal(result.plan.unallocatedHours), before), parseDecimal(quota)));
+}
+
+/** «Остаток квоты: 34 ч.» or «Перебор квоты: 10 ч.» once a work enters the plan; empty without a quota. */
+export function describeRestAfterInclusion(source: QuarterDirectionCapacity, estimate: string | null, format: HoursFormatter): string {
+  if (!source.quotaSet) return "";
+  const after = forecastSource(source, { add: [estimate] });
+  return overrun(after)
+    ? `Перебор квоты: ${lowerBound(after)}${formatDeficitHours(after.overrunHours, format)}.`
+    : `Остаток квоты: ${upperBound(after)}${format(after.remainingHours)}.`;
+}

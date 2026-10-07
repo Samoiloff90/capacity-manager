@@ -1,0 +1,198 @@
+/* Quarter planner (QUARTER_PLANNING_UX.md): the agreed prototype in the 0.3.0 style tokens:
+   blue #1d5fd1, borders #dfe6f0, overrun #9b1c1c, missing estimates #805815. */
+.project-totals.project-totals-plan { gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 12px 18px; }
+.project-totals-plan .project-total + .project-total { padding-left: 16px; }
+.project-chip.preview { background: #fff3d9; color: #875813; }
+.project-chip.fresh { background: #eaf1fe; color: #164fae; }
+.project-preview-note { font-size: 14px; }
+.pp-q { color: #526071; font-size: 13px; font-weight: 600; }
+.pp-sign { align-items: center; display: inline-flex; font-weight: 600; gap: 6px; }
+.pp-sign svg { flex: none; }
+.pp-sign.over { color: #9b1c1c; }
+.pp-sign.unknown { color: #805815; }
+.pp-sign.fits { color: #1f6a40; }
+.pp-sign.plain { color: #254b7d; }
+.pp-bar { background: #e7edf5; border-radius: 3px; display: block; height: 6px; overflow: hidden; }
+.pp-bar > span { background: #1d5fd1; display: block; height: 100%; }
+.pp-bar.over > span { background: #b42318; }
+.pp-kbd { background: #f7f9fc; border: 1px solid #d5deea; border-radius: 4px; color: #526071; font-size: 11px; font-weight: 600; padding: 1px 5px; white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) {
+  .pp-fresh { animation: pp-fresh 1.8s ease-out 1; }
+  .pp-stick { transition: opacity .15s ease-out, visibility .15s; }
+}
+@keyframes pp-fresh { from { background: #dbe8ff; } to { background: transparent; } }
+
+/* Plan tab: one row per source. */
+.pp-overview th, .pp-overview td { font-size: 14px; padding: 10px 14px; }
+.pp-overview th { font-size: 13px; }
+.pp-overview tbody tr.pp-clickable { cursor: pointer; }
+.pp-overview tbody tr.pp-clickable:hover { background: #f7f9fc; }
+.project-app .pp-overview .pp-name { background: transparent; border: 0; color: #1d5fd1; font-weight: 600; justify-content: flex-start; min-height: 28px; min-width: 28px; padding: 2px 0; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.pp-overview .pp-sub { color: #667085; display: block; font-size: 13px; margin-top: 2px; }
+.pp-overview .pp-muted-row td { background: #fafbfd; color: #526071; }
+.pp-overview .pp-fill { display: grid; gap: 6px; min-width: 150px; }
+.pp-overview td.pp-chev { color: #7a869a; width: 32px; }
+
+/* Source workspace. */
+.pp-crumbs { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+.project-app .pp-crumbs .project-link-button { font-size: 14px; gap: 4px; justify-content: flex-start; min-height: 28px; min-width: 28px; }
+.project-app .pp-crumbs .pp-switch { align-items: center; color: #526071; display: flex; font-size: 13px; gap: 8px; margin-left: auto; }
+.pp-crumbs select { font-size: 14px; min-width: 300px; }
+.pp-head { background: #fff; border: 1px solid #dfe6f0; border-radius: 8px; margin-bottom: 14px; padding: 14px 20px 16px; }
+.pp-head-top { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; margin-bottom: 12px; }
+.pp-head-title { align-items: baseline; display: flex; flex: 1; flex-wrap: wrap; gap: 2px 12px; min-width: 200px; }
+.pp-head h2 { font-size: 21px; }
+.pp-head h2:focus { outline: none; }
+.pp-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.pp-nums { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
+.pp-num { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pp-num + .pp-num { border-left: 1px solid #e7edf5; padding-left: 16px; }
+.pp-num > span:first-child { align-items: center; color: #667085; display: flex; font-size: 12px; gap: 2px; }
+.pp-num strong { font-size: 24px; font-variant-numeric: tabular-nums; }
+.pp-num strong.over { color: #9b1c1c; }
+.pp-num .pp-note { align-items: center; color: #667085; display: flex; flex-wrap: wrap; font-size: 12px; gap: 4px 6px; }
+.pp-was { color: #164fae; font-weight: 600; }
+
+/* Compact source line that stays on top while the work list scrolls; takes no room in the flow. */
+.pp-stick { height: 50px; margin-bottom: -50px; opacity: 0; pointer-events: none; position: sticky; top: 0; visibility: hidden; z-index: 8; }
+.pp-stick.show { opacity: 1; visibility: visible; }
+.pp-stick-inner { align-items: center; background: #fff; border: 1px solid #dfe6f0; border-radius: 0 0 8px 8px; box-shadow: 0 6px 18px rgba(23, 32, 51, .12); display: flex; gap: 6px 22px; height: 100%; padding: 0 20px; white-space: nowrap; }
+.pp-stick-inner > b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; }
+.pp-stick-item { align-items: center; color: #667085; display: inline-flex; font-size: 13px; gap: 4px; }
+.pp-stick-item strong { color: #172033; font-size: 15px; font-variant-numeric: tabular-nums; margin-left: 4px; }
+.pp-stick-item strong.over { color: #9b1c1c; }
+.pp-stick-inner .pp-bar { flex: 1; min-width: 80px; }
+
+/* Works: on review first, then the plan, then works not in this quarter. */
+.pp-works { background: #fff; border: 1px solid #dfe6f0; border-radius: 8px; }
+.pp-group-head { align-items: baseline; background: #f7f9fc; border-bottom: 1px solid #e7edf5; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 10px 16px; }
+.pp-group-head h3 { align-items: center; display: inline-flex; font-size: 15px; gap: 2px; margin: 0; }
+.pp-group-head > span { color: #667085; font-size: 13px; }
+.pp-group-head.cand-head { background: #f3f7fd; border-bottom-color: #c9dbf9; border-radius: 8px 8px 0 0; }
+.pp-group-head.plan-head { border-top: 1px solid #dfe6f0; }
+.pp-row { align-items: center; border-bottom: 1px solid #e7edf5; display: grid; gap: 8px 16px; grid-template-columns: minmax(0, 1fr) 130px 280px 200px 32px; padding: 10px 16px; }
+.pp-row .pp-cell-empty { min-height: 1px; }
+.pp-row .pp-wname { font-size: 14px; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
+.pp-row .pp-est { font-size: 14px; font-variant-numeric: tabular-nums; }
+.pp-row .pp-est .pp-sign { font-size: 13px; }
+.pp-row .pp-effect { font-size: 13px; line-height: 1.35; }
+.project-app .pp-row button.secondary { font-size: 14px; white-space: nowrap; }
+.pp-row .pp-comment { color: #667085; display: block; font-size: 13px; margin-top: 2px; }
+.pp-link-chip { border: 1px solid #d5deea; border-radius: 4px; color: #667085; font-size: 11px; margin-left: 8px; padding: 0 5px; vertical-align: 1px; }
+.pp-copied { color: #1f6a40; font-size: 12px; font-weight: 600; margin-left: 8px; }
+.pp-copy-manual { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.pp-copy-manual input { font-size: 13px; min-width: 260px; }
+.pp-ghost { align-items: center; background: #eef5ff; border-bottom: 1px solid #c9dbf9; color: #254b7d; display: flex; flex-wrap: wrap; font-size: 14px; gap: 6px 14px; padding: 10px 16px; }
+.project-app .pp-ghost .project-link-button { font-size: 14px; min-height: 28px; }
+.project-app .pp-toggle { background: #f7f9fc; border: 0; border-radius: 0; border-top: 1px solid #dfe6f0; color: #172033; justify-content: flex-start; padding: 10px 16px; width: 100%; }
+.pp-toggle span { color: #667085; font-size: 13px; font-weight: 400; }
+.pp-empty-works { color: #526071; font-size: 14px; padding: 18px 16px; }
+.pp-empty-source { align-items: flex-start; display: grid; gap: 12px; justify-items: start; padding: 22px 20px; }
+.pp-empty-source p { font-size: 15px; max-width: 680px; }
+.pp-menu { background: #fff; border: 1px solid #dfe6f0; border-radius: 8px; box-shadow: 0 10px 28px rgba(23, 32, 51, .18); display: grid; max-width: 340px; padding: 6px; position: absolute; right: 0; top: 36px; width: max-content; z-index: 20; }
+.project-app .pp-menu button { background: transparent; color: #172033; justify-content: flex-start; min-height: 34px; padding: 6px 10px; text-align: left; }
+.project-app .pp-menu button.pp-danger-item { color: #a62929; }
+.project-app .pp-menu button:hover, .project-app .pp-menu button:focus-visible { background: #eef3fb; filter: none; }
+.pp-menu hr { border: 0; border-top: 1px solid #e7edf5; margin: 4px 0; }
+.pp-menu-anchor { position: relative; }
+
+/* Add and edit form: what is needed first, optional fields in the second row. */
+.pp-form { background: #fff; border: 1px solid #c9dbf9; border-radius: 8px; box-shadow: 0 0 0 3px #eef5ff; margin-bottom: 14px; padding: 14px 20px 0; }
+.pp-form.inline { background: #f8fbff; border-radius: 0; border-width: 0 0 1px; box-shadow: none; margin: 0; padding: 12px 16px 0; }
+.pp-form.to-plan { border-color: #eed69b; box-shadow: 0 0 0 3px #fff8e7; }
+.pp-form-head { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; margin-bottom: 10px; }
+.pp-form-head h3 { font-size: 16px; margin: 0; }
+.pp-form-row { align-items: start; display: grid; gap: 12px 16px; grid-template-columns: minmax(0, 1fr) 200px auto; }
+.pp-form-row.second { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 12px; }
+.pp-form.inline .pp-form-row:not(.second) { grid-template-columns: minmax(0, 1fr) 200px; }
+.pp-form input[type="text"] { width: 100%; }
+.pp-form label > span:first-child { align-items: center; display: inline-flex; gap: 2px; }
+.pp-hint { color: #667085; font-size: 12px; }
+.pp-hint.pp-zero { color: #805815; }
+.pp-mark-note { display: block; margin-top: 6px; }
+.pp-form-foot { align-items: center; border-top: 1px solid #e7edf5; display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; margin-top: 12px; padding: 10px 0 12px; }
+.pp-effect-line { align-items: center; display: flex; flex-wrap: wrap; font-size: 14px; gap: 4px 8px; min-width: 0; }
+.project-app .pp-est-note { color: #667085; font-size: 12px; line-height: 1.45; margin-top: 8px; max-width: 880px; }
+.pp-done { align-items: center; background: #eef5ff; border: 1px solid #c9dbf9; border-radius: 6px; color: #254b7d; display: flex; flex-wrap: wrap; font-size: 14px; gap: 6px 12px; margin-top: 12px; padding: 8px 12px; }
+.project-app .pp-done .project-link-button { font-size: 14px; min-height: 28px; }
+.pp-legend { color: #475467; font-size: 13px; margin-bottom: 6px; padding: 0; }
+.pp-seg { border: 1px solid #d5deea; border-radius: 6px; display: inline-flex; overflow: hidden; }
+.project-app .pp-seg label { align-items: center; color: #24476f; cursor: pointer; display: flex; font-size: 14px; min-height: 34px; padding: 6px 14px; position: relative; white-space: nowrap; }
+.pp-seg label + label { border-left: 1px solid #d5deea; }
+.project-app .pp-seg input { cursor: pointer; height: 100%; inset: 0; margin: 0; min-height: 0; opacity: 0; padding: 0; position: absolute; width: 100%; }
+.project-app .pp-seg label:has(input:checked) { background: #eaf1fe; color: #164fae; font-weight: 700; }
+.pp-seg label:has(input:focus-visible) { outline: 3px solid #a8c9ff; outline-offset: -3px; }
+.pp-remembered { align-items: center; background: #fff3d9; border-radius: 5px; color: #875813; display: inline-flex; font-size: 12px; font-weight: 600; gap: 5px; margin-top: 6px; padding: 3px 8px; }
+.pp-draft-mark { color: #875813; font-size: 12px; font-weight: 600; }
+
+/* Sources and shares. */
+.pp-sources td { vertical-align: top; }
+.pp-sources .pp-name-cell { min-width: 220px; }
+.pp-sources .pp-name-cell > input { width: 100%; }
+.project-app .pp-sources input.pp-share, .project-app .pp-people input.pp-share, .project-app .pp-inline-label input.pp-share { min-width: 0; text-align: right; width: 84px; }
+.project-app .pp-sources select { min-width: 0; width: 170px; }
+.pp-sources .pp-cellnum { display: block; font-size: 14px; font-variant-numeric: tabular-nums; line-height: 36px; }
+.pp-sources .pp-cellnum.text { line-height: 1.4; padding-top: 8px; }
+.pp-saved { color: #667085; display: block; font-size: 12px; line-height: 1.3; margin-top: 3px; }
+.pp-saved.changed { color: #164fae; font-weight: 600; }
+.project-app .pp-sources .pp-reserve-link { display: flex; font-size: 12px; margin: 4px 0 0 auto; min-height: 20px; }
+.pp-sources tfoot td { background: #f7f9fc; border-bottom: 0; border-top: 1px solid #dfe6f0; font-size: 14px; font-weight: 600; }
+.pp-sources tfoot tr + tr td { border-top: 1px solid #e7edf5; }
+.pp-table-note { margin-top: 8px; }
+.pp-people { margin-top: 14px; }
+.pp-people td { vertical-align: middle; }
+.project-app .pp-inline-label { display: inline-grid; }
+.pp-dialog-note { margin-top: 10px; }
+.pp-hintline { color: #254b7d; font-size: 13px; font-weight: 600; margin-top: 10px; }
+
+/* Wide dialogs: header, scrolling body, fixed footer. */
+.project-modal.pp-mid { display: flex; flex-direction: column; max-height: 100%; max-width: 760px; padding: 0; }
+.pp-modal-head { border-bottom: 1px solid #e7edf5; padding: 20px 24px 14px; }
+.pp-modal-head h2 { margin: 0; }
+.pp-modal-head p { font-size: 14px; margin-top: 4px; }
+.pp-modal-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 24px; }
+.pp-modal-foot { align-items: center; border-top: 1px solid #e7edf5; display: flex; flex-wrap: wrap; gap: 10px 16px; justify-content: space-between; padding: 14px 24px; }
+.pp-modal-foot .pp-effect-line { flex: 1; }
+.pp-modal-foot > .project-actions { margin-left: auto; }
+.project-modal .pp-modal-foot .project-actions { margin-top: 0; }
+.pp-confirm p { color: #344054; font-size: 15px; line-height: 1.55; }
+.pp-confirm ul { color: #344054; font-size: 15px; margin: 10px 0 0; padding-left: 20px; }
+
+/* Quarter without sources, and the help page. */
+.pp-setup { background: #fff; border: 1px solid #dfe6f0; border-radius: 8px; max-width: 860px; padding: 22px 24px; }
+.pp-setup h2 { font-size: 19px; margin-bottom: 6px; }
+.pp-steps { counter-reset: step; display: grid; list-style: none; margin: 18px 0 0; padding: 0; }
+.pp-steps li { align-items: start; border-top: 1px solid #e7edf5; display: grid; gap: 4px 16px; grid-template-columns: 34px minmax(0, 1fr) auto; padding: 14px 0; }
+.pp-steps li::before { align-items: center; background: #eef3fb; border-radius: 50%; color: #24476f; content: counter(step); counter-increment: step; display: flex; font-size: 14px; font-weight: 700; height: 28px; justify-content: center; width: 28px; }
+.pp-steps li.done::before { background: #e8f5ed; color: #1f6a40; content: "✓"; }
+.pp-steps li.current::before { background: #1d5fd1; color: #fff; }
+.pp-steps b { font-size: 15px; }
+.pp-steps p { font-size: 14px; margin: 2px 0 0; }
+.pp-step-state { color: #667085; font-size: 13px; white-space: nowrap; }
+.project-app .pp-steps .project-link-button { font-size: 13px; white-space: nowrap; }
+.pp-setup-cta { align-items: center; background: #eef5ff; border: 1px solid #c9dbf9; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: space-between; margin-top: 16px; padding: 14px 18px; }
+.pp-setup-cta p { color: #254b7d; font-size: 14px; max-width: 520px; }
+.project-app .pp-setup-cta button { font-size: 15px; font-weight: 600; min-height: 40px; padding: 8px 18px; }
+.pp-help .pp-steps { margin-top: 0; }
+.project-app .pp-section-title { color: #172033; font-size: 15px; font-weight: 700; margin: 18px 0 8px; }
+.pp-terms { display: grid; gap: 8px; margin: 0 0 12px; }
+.pp-terms > div { display: grid; gap: 2px 14px; grid-template-columns: 200px minmax(0, 1fr); }
+.pp-terms dt { color: #172033; font-size: 14px; font-weight: 600; }
+.pp-terms dd { color: #475467; font-size: 14px; margin: 0; }
+
+/* Window 1080 × 720: the consequence goes under the name, the plan row drops its empty cells. */
+@media (max-width: 1240px) {
+  .pp-row { grid-template-columns: minmax(0, 1fr) 120px 190px 32px; }
+  .pp-row .pp-effect { grid-column: 1 / 2; grid-row: 2; }
+  .pp-row .pp-effect.pp-cell-empty { display: none; }
+  .pp-row.plan { grid-template-columns: minmax(0, 1fr) 120px 32px; }
+  .pp-row.plan .pp-action { display: none; }
+  .pp-num strong { font-size: 20px; }
+  .project-totals-plan .project-total > strong { font-size: 20px; }
+  .pp-crumbs select { min-width: 240px; }
+}
+@media (max-width: 760px) {
+  .project-totals.project-totals-plan, .pp-nums { grid-template-columns: 1fr; }
+  .pp-num + .pp-num { border-left: 0; border-top: 1px solid #e7edf5; padding: 10px 0 0; }
+  .pp-form-row, .pp-form-row.second { grid-template-columns: 1fr; }
+}

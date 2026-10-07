@@ -6,6 +6,7 @@ import type {
   CalculateQuarterCapacityResult, QuarterDirectionCapacity, QuarterReserveMember, QuarterSnapshot
 } from "./quarter-capacity.types";
 import { validateQuarterSnapshot } from "./quarter-snapshot.validation";
+import { reserveByPerson } from "./reserve";
 
 const zero = parseDecimal("0");
 const hundred = parseDecimal("100");
@@ -16,28 +17,17 @@ type Direction = QuarterSnapshot["directions"][number];
 type Quota = { set: boolean; hours: ExactDecimal; members: QuarterReserveMember[] };
 
 /**
- * A work source gets its share of all available hours. A reserve is summed per person:
- * available hours × own share, or × the common share (DEC-038). Without own shares the two
- * are the same exact number, so quarters saved by 0.3.0 keep their budgets.
+ * A work source gets its share of all available hours. A reserve is summed per person
+ * (reserveByPerson, DEC-038). Without own shares the two are the same exact number, so
+ * quarters saved by 0.3.0 keep their budgets.
  */
-function quota(direction: Direction, people: readonly { memberId: string; hours: ExactDecimal }[], total: ExactDecimal): Quota {
+function quota(direction: Direction, people: readonly { memberId: string; availableHours: string }[], total: ExactDecimal): Quota {
   if (direction.kind !== "reserve") {
     return direction.percent === null ? { set: false, hours: zero, members: [] }
       : { set: true, hours: share(total, direction.percent), members: [] };
   }
-  const own = new Map(direction.memberPercents.map((row) => [row.memberId, row.percent]));
-  let hours = zero;
-  let set = people.length > 0 || direction.percent !== null;
-  const members = people.map((person) => {
-    const percent = own.get(person.memberId) ?? direction.percent;
-    const reserve = percent === null ? null : share(person.hours, percent);
-    if (reserve === null) set = false; else hours = addDecimal(hours, reserve);
-    return {
-      memberId: person.memberId, availableHours: decimalToString(person.hours), percent,
-      own: own.has(person.memberId), reserveHours: reserve === null ? null : decimalToString(reserve)
-    };
-  });
-  return { set, hours: set ? hours : zero, members };
+  const reserve = reserveByPerson(people, direction.percent, new Map(direction.memberPercents.map((row) => [row.memberId, row.percent])));
+  return { set: reserve.total !== null, hours: reserve.total === null ? zero : parseDecimal(reserve.total), members: reserve.members };
 }
 
 /** A complete, resolved quarter snapshot is the only source of calendar and capacity data. */
@@ -82,7 +72,7 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
     availableHours: decimalToString(hoursByCompetency.get(competency.id) ?? zero)
   }));
   // Team order, as on the screen: the reserve window lists people as the team tab does.
-  const people = snapshot.members.map((member) => ({ memberId: member.id, hours: hoursByMember.get(member.id) ?? zero }));
+  const people = snapshot.members.map((member) => ({ memberId: member.id, availableHours: decimalToString(hoursByMember.get(member.id) ?? zero) }));
 
   // A share not set yet adds nothing and leaves the allocation incomplete.
   let totalPercent = zero;

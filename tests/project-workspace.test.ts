@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { PROJECT_NAME_FORM, ProjectWorkspaceController, type DiscardAnswer, type WorkspaceRepository } from "../src/app/project-workspace-controller";
+import {
+  PROJECT_NAME_FORM, ProjectWorkspaceController, workInputKey, type DiscardAnswer, type WorkInput, type WorkspaceRepository
+} from "../src/app/project-workspace-controller";
 import type { QuarterReport } from "../src/export/quarter-report";
 import type { ReportSaveOutcome } from "../src/export/report-file";
 import { ProjectPersistenceError, type FormatUpgrade, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
@@ -518,7 +520,7 @@ describe("unsaved-changes dialog with saving", () => {
     changeFte(controller, "0.5");
     const switching = controller.actions.selectPlan("q2");
     await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toEqual({
-      message: "В квартале «1 квартал 2026 года» есть несохранённые изменения. Сохранить их перед продолжением?", canSave: true
+      message: "В квартале «1 квартал 2026 года» есть несохранённые изменения. Сохранить их перед продолжением?", canSave: true, details: []
     }));
     controller.actions.answerDiscard("save");
     expect(await switching).toBe(true);
@@ -809,14 +811,14 @@ describe("first save of a project made by 0.1.0–0.3.0 (DEC-044)", () => {
     expect(repository.upgradeFormat).toHaveBeenCalledTimes(1);
     expect(repository.upgradeFormat.mock.invocationCallOrder[0]).toBeLessThan(repository.save.mock.invocationCallOrder[0]);
     const state = controller.getSnapshot();
-    expect(state.notice).toBe(`Формат проекта обновлён. Резервная копия исходного проекта: ${backup}. Расчёт сохранён в папке проекта.`);
+    expect(state.notice).toBe(`Формат проекта обновлён. Резервная копия исходного проекта: ${backup}. Изменения квартала «1 квартал 2026 года» сохранены.`);
     expect(state.project?.schemaVersion).toBe(2);
     expect(state.dirty).toBe(false);
     changeFte(controller, "0.75");
     expect(await controller.actions.save()).toBe(true);
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(repository.upgradeFormat).toHaveBeenCalledTimes(1);
-    expect(controller.getSnapshot().notice).toBe("Расчёт сохранён в папке проекта.");
+    expect(controller.getSnapshot().notice).toBe("Изменения квартала «1 квартал 2026 года» сохранены.");
   });
 
   it("does not save when the upgrade fails and shows why", async () => {
@@ -958,5 +960,103 @@ describe("choosing the project folder", () => {
     // Later operations are not affected by the finished close request.
     expect(await controller.actions.chooseAndOpenProject()).toBe(true);
     expect(dependencies.openProject).toHaveBeenCalledWith(folderA);
+  });
+});
+
+describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.md)", () => {
+  const input = (name: string, fields: Partial<WorkInput> = {}): WorkInput => ({
+    planId: "q1", sourceId: "ui", sourceName: "Запросы УИ", quarter: "1 квартал 2026 года",
+    name, estimate: "28", link: "", comment: "", mark: "plan", remembered: false, open: false, ...fields
+  });
+  const key = workInputKey("q1", "ui");
+  const lost = "Незаконченный ввод работ в файл проекта не сохраняется и будет потерян:";
+
+  it("keeps unfinished input of a new work across quarters and asks before the project closes", async () => {
+    const { controller } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    controller.actions.setWorkInput(key, input("Выгрузка для бухгалтерии"));
+    controller.actions.rememberMark(key, "plan");
+    // Not part of the quarter: nothing to save, and another quarter keeps it for later.
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(await controller.actions.selectPlan("q2")).toBe(true);
+    expect(controller.getSnapshot().confirmation).toBeNull();
+    expect(controller.getSnapshot().workInputs[key]?.name).toBe("Выгрузка для бухгалтерии");
+    expect(controller.getSnapshot().lastMarks[key]).toBe("plan");
+
+    const closing = controller.actions.closeProject();
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toEqual({
+      message: lost, canSave: false, details: ["«Запросы УИ», 1 квартал 2026 года: «Выгрузка для бухгалтерии»"]
+    }));
+    controller.actions.answerDiscard(false);
+    expect(await closing).toBe(false);
+    expect(controller.getSnapshot().workInputs[key]).toBeDefined();
+
+    const again = controller.actions.closeProject();
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toBeTruthy());
+    controller.actions.answerDiscard(true);
+    expect(await again).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({ project: null, workInputs: {}, lastMarks: {} });
+  });
+
+  it("lists the unfinished input in the same dialog as unsaved changes of the quarter", async () => {
+    const { controller } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    changeFte(controller, "0.5");
+    controller.actions.setWorkInput(key, input("", { estimate: "", comment: "уточнить у заказчика" }));
+    const closing = controller.actions.closeProject();
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toEqual({
+      message: `В квартале «1 квартал 2026 года» есть несохранённые изменения. Сохранить их перед продолжением? ${lost}`,
+      canSave: true, details: ["«Запросы УИ», 1 квартал 2026 года: работа без названия"]
+    }));
+    controller.actions.answerDiscard("save");
+    expect(await closing).toBe(true);
+  });
+
+  it("does not ask about an empty form, and opening another project starts without the old input", async () => {
+    const { controller } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    controller.actions.setWorkInput(key, input("", { estimate: "  ", open: true }));
+    controller.actions.rememberMark(key, "candidate");
+    expect(await controller.actions.openProject(folderB)).toBe(true);
+    expect(controller.getSnapshot().confirmation).toBeNull();
+    expect(controller.getSnapshot()).toMatchObject({ workInputs: {}, lastMarks: {} });
+  });
+
+  it("a save with an overrun and shares above 100% names both next to the notice; the plan is saved as is", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    controller.actions.updateDraft((draft) => ({
+      ...draft,
+      directions: [
+        { id: "ui", name: "УИ", percent: "60", kind: "work", memberPercents: [] },
+        { id: "rest", name: "Остальное", percent: "50", kind: "work", memberPercents: [] }
+      ],
+      tasks: [{ id: "big", name: "Большая работа", directionId: "ui", estimateHours: "1000", mark: "plan", link: null, comment: null }]
+    }));
+    expect(await controller.actions.save()).toBe(true);
+    const state = controller.getSnapshot();
+    expect(state.notice).toBe("Изменения квартала «1 квартал 2026 года» сохранены.");
+    expect(state.warning).toMatch(/^Сохранение не балансирует план: сумма долей 110%, на .+ ч больше доступной ёмкости; перебор квоты — «УИ» .+ ч\. Это остаётся видно/);
+    expect(repository.rows.get("q1")?.snapshot.tasks).toHaveLength(1);
+    changeFte(controller, "0.5");
+    expect(controller.getSnapshot()).toMatchObject({ notice: "", warning: "" });
+  });
+
+  it("a field whose text is not understood blocks the save and says which one", async () => {
+    const { controller, repository } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    controller.actions.setPendingFormDirty("source-share:q1:ui", true, "Доля источника «УИ»: число от 0 до 100.");
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(await controller.actions.save()).toBe(false);
+    expect(controller.getSnapshot().error).toBe("Не удалось сохранить. Доля источника «УИ»: число от 0 до 100.");
+    expect(repository.save).not.toHaveBeenCalled();
+    controller.actions.setPendingFormDirty("source-share:q1:ui", false);
+    changeFte(controller, "0.5");
+    expect(await controller.actions.save()).toBe(true);
   });
 });

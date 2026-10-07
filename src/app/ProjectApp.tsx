@@ -1,36 +1,37 @@
-import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { useProjectWorkspace } from "./project-workspace";
-import { PROJECT_NAME_FORM } from "./project-workspace-controller";
+import { PROJECT_NAME_FORM, quarterTitle } from "./project-workspace-controller";
 import { DiscardDialog, FormatUpgradeDialog, NewQuarterDialog } from "./ProjectDialogs";
-import { DeleteButton, InfoHint, PencilIcon, restoreFocus } from "./project-ui";
+import { DeleteButton, DIALOG_ROOT_ID, InfoHint, PencilIcon, restoreFocus } from "./project-ui";
+import { hours, isMac, saveShortcut, Sign } from "./plan-ui";
+import { SourcesTab } from "./SourcesTab";
 import { TasksEditor } from "./TasksEditor";
 import { describeValidationIssue } from "./validation-text";
 import { getQuarterDates, type Quarter } from "../domain/capacity/calendar-quarter";
-import { formatBalanceHours, formatScreenHours, normalizeUserDecimal } from "../domain/capacity/input-format";
-import { describeDirectionBalance, describeScreenBalanceCells } from "../domain/capacity/direction-balance";
+import { formatDeficitHours, normalizeUserDecimal } from "../domain/capacity/input-format";
+import { calculateQuarterCapacity } from "../domain/capacity/quarter-capacity.calculator";
 import { getCalendarOverrides, type CalendarMode } from "../domain/capacity/project-calendar";
 import { describeQuarterSprints, type QuarterSprints } from "../domain/capacity/quarter-sprints";
-import { describeQuarterTotals, pluralRu } from "../domain/capacity/quarter-totals";
+import { pluralRu } from "../domain/capacity/quarter-totals";
+import { describeAllocation, effectivePercent, formatPercent } from "../domain/capacity/source-plan";
 import type { QuarterCapacityResult, QuarterSnapshot, QuarterValidationIssue } from "../domain/capacity/quarter-capacity.types";
 import "../styles/project-app.css";
+import "../styles/quarter-planner.css";
 
-type Tab = "team" | "calendar" | "absences" | "allocation" | "tasks";
+type Tab = "team" | "calendar" | "absences" | "sources" | "tasks";
 type UpdateDraft = (update: (current: QuarterSnapshot) => QuarterSnapshot) => void;
 type EditorProps = { snapshot: QuarterSnapshot; update: UpdateDraft; result: QuarterCapacityResult | null };
 const tabs: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "team", label: "Команда" },
   { id: "calendar", label: "Календарь" },
   { id: "absences", label: "Отсутствия" },
-  { id: "allocation", label: "Распределение" },
+  { id: "sources", label: "Источники и доли" },
   { id: "tasks", label: "Задачи" }
 ];
 const nameGuard = PROJECT_NAME_FORM;
 const newId = () => crypto.randomUUID();
 const numberText = (value: string) => value.replace(".", ",");
-const hours = formatScreenHours;
-const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
-const saveShortcut = isMac ? "⌘S" : "Ctrl+S";
 
 /** "Сохраните квартал" → "Отчёт: сохраните квартал"; a hint that already names the report stays as is. */
 function reportHint(hint: string): string {
@@ -68,6 +69,8 @@ export default function ProjectApp() {
   const [creatingQuarter, setCreatingQuarter] = useState(false);
   const [uiError, setUiError] = useState("");
   const [tab, setTab] = useState<Tab>("team");
+  const [tabDialog, setTabDialog] = useState(false);
+  const [saveHint, setSaveHint] = useState(0);
   const page = useRef<HTMLDivElement>(null);
   const projectId = state.project?.projectId;
   const projectName = state.project?.name;
@@ -84,10 +87,22 @@ export default function ProjectApp() {
     setUiError("");
   }, [projectId, projectName, state.activePlanId]);
 
+  // The saved version of the active quarter: «сохранено: 10%» markers and quota changes.
+  const savedPlan = state.plans.find((plan) => plan.planId === state.activePlanId);
+  const savedResult = useMemo(() => {
+    if (!savedPlan) return null;
+    const calculation = calculateQuarterCapacity(savedPlan.snapshot);
+    return calculation.ok ? calculation.result : null;
+  }, [savedPlan]);
+  const setPending = useCallback((key: string, dirty: boolean, message?: string) => actions.setPendingFormDirty(key, dirty, message), [actions]);
+  const onTabDialog = useCallback((open: boolean) => setTabDialog(open), []);
+
   // Ctrl+S / ⌘S. Leaving the focused field first applies its decimal normalization to the draft;
   // the cursor returns there after saving. The team-name form is saved by its own button.
   const saveFromKeyboard = useRef<() => void>(() => undefined);
   saveFromKeyboard.current = () => {
+    // Inside the reserve window Ctrl+S does not save: the window asks to finish with it first.
+    if (tabDialog) { setSaveHint((count) => count + 1); return; }
     if (disabled || state.confirmation || state.formatUpgrade || creatingQuarter || renaming || !state.draft || !state.dirty) return;
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     focused?.blur();
@@ -103,7 +118,8 @@ export default function ProjectApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const modalOpen = Boolean(state.confirmation) || Boolean(state.formatUpgrade) || (creatingQuarter && Boolean(state.project));
+  const modalOpen = Boolean(state.confirmation) || Boolean(state.formatUpgrade) || (creatingQuarter && Boolean(state.project))
+    || tabDialog;
   useEffect(() => { page.current?.toggleAttribute("inert", modalOpen); }, [modalOpen]);
 
   async function chooseProject(create: boolean) {
@@ -149,6 +165,7 @@ export default function ProjectApp() {
       }}>Скрыть сообщение</button></div>
     </div>}
     {state.notice && <div className="project-message" role="status">{state.notice}</div>}
+    {state.warning && <div className="project-message warning" role="status">{state.warning}</div>}
   </>;
 
   const status = state.confirmation || state.formatUpgrade ? "Ожидает решения" : state.busy ? "Выполняем…"
@@ -225,37 +242,37 @@ export default function ProjectApp() {
         </div>
 
         {!state.draft ? <div className="empty-state">Создайте квартал кнопкой «Новый квартал…» или выберите сохранённый, чтобы добавить сотрудников и настроить рабочие дни.</div> : <>
-          <QuarterTotalsStrip snapshot={state.draft} result={result} onShowBalance={() => setTab("tasks")} />
+          <PlanTotals result={result} />
           {state.calculation && !state.calculation.ok && <ValidationMessages issues={state.calculation.errors} />}
-          <nav className="project-tabs" role="tablist" aria-label="План квартала">{tabs.map((item) => {
-            // Same condition as AllocationWarning: an empty list already asks for directions.
-            const marked = item.id === "allocation" && result !== null && result.allocation.status !== "complete" && state.draft!.directions.length > 0;
+          <nav className="project-tabs" role="tablist" aria-label="Разделы квартала">{tabs.map((item) => {
+            // Shares above 100% are an error of the plan; an unfinished allocation is not (DEC-029–035).
+            const marked = item.id === "sources" && result !== null && result.plan.overallocated;
             return <button key={item.id} type="button" role="tab" id={`project-tab-${item.id}`} aria-selected={tab === item.id}
-              aria-controls="project-panel" aria-describedby={marked ? "allocation-incomplete" : undefined}
-              title={marked ? "Сумма долей направлений не 100%" : undefined}
+              aria-controls="project-panel" aria-describedby={marked ? "allocation-over" : undefined}
+              title={marked ? "Сумма долей больше 100%" : undefined}
               onClick={() => setTab(item.id)}>{item.label}{marked && <span className="project-tab-marker" aria-hidden="true" />}</button>;
           })}</nav>
-          <span id="allocation-incomplete" className="visually-hidden">Сумма долей направлений не 100%</span>
+          <span id="allocation-over" className="visually-hidden">Сумма долей больше 100%</span>
           <fieldset disabled={disabled} aria-busy={disabled}>
             <section id="project-panel" role="tabpanel" aria-labelledby={`project-tab-${tab}`} key={`${state.activePlanId}-${tab}`}>
               {tab === "team" && <TeamEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
               {tab === "calendar" && <CalendarEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
               {tab === "absences" && <AbsenceEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
-              {tab === "allocation" && <AllocationEditor snapshot={state.draft} update={actions.updateDraft} result={result} />}
-              {tab === "tasks" && <>
-                <AllocationWarning snapshot={state.draft} result={result} />
-                <TasksEditor snapshot={state.draft} update={actions.updateDraft} onGoToAllocation={() => setTab("allocation")} />
-                <BalanceSummary snapshot={state.draft} result={result} />
-              </>}
+              {tab === "sources" && state.activePlanId && <SourcesTab planId={state.activePlanId} quarter={quarterTitle(state.draft)}
+                snapshot={state.draft} saved={savedPlan?.snapshot ?? null} result={result} savedResult={savedResult}
+                update={actions.updateDraft} setPending={setPending} saveHint={saveHint} onDialog={onTabDialog} />}
+              {tab === "tasks" && <TasksEditor snapshot={state.draft} update={actions.updateDraft} onGoToAllocation={() => setTab("sources")} />}
             </section>
           </fieldset>
         </>}
       </main>
     </>}
     </div>
+    <div id={DIALOG_ROOT_ID} />
     {creatingQuarter && state.project && <NewQuarterDialog plans={state.plans} onCancel={() => setCreatingQuarter(false)}
       onCreate={(year, quarter, mode, copyFrom) => { void createQuarter(year, quarter, mode, copyFrom); }} />}
-    {state.confirmation && <DiscardDialog message={state.confirmation.message} canSave={state.confirmation.canSave} onAnswer={actions.answerDiscard} />}
+    {state.confirmation && <DiscardDialog message={state.confirmation.message} details={state.confirmation.details}
+      canSave={state.confirmation.canSave} onAnswer={actions.answerDiscard} />}
     {state.formatUpgrade && <FormatUpgradeDialog message={state.formatUpgrade.message} folderPath={state.formatUpgrade.folderPath}
       onAnswer={actions.answerFormatUpgrade} />}
   </div>;
@@ -276,47 +293,50 @@ function PeriodFacts({ snapshot, result }: { snapshot: QuarterSnapshot; result: 
   </span>;
 }
 
-function QuarterTotalsStrip({ snapshot, result, onShowBalance }: {
-  snapshot: QuarterSnapshot; result: QuarterCapacityResult | null; onShowBalance: () => void;
-}) {
-  const totals = result ? describeQuarterTotals(result) : null;
-  const members = snapshot.members.length;
-  const tasks = snapshot.tasks.length;
-  const deficits = totals?.deficitDirections ?? [];
-  return <section className="project-totals" aria-label="Итоги квартала">
-    <div className="project-total project-total-available">
+/**
+ * The team balance in the manager's order (QUARTER_PLANNING.md): available → reserve → works
+ * in the plan → rests of quotas → not allocated. Reserve and works are never summed up.
+ */
+function PlanTotals({ result }: { result: QuarterCapacityResult | null }) {
+  const plan = result?.plan;
+  const allocation = result ? describeAllocation(result) : null;
+  const members = result?.totals.memberCount ?? 0;
+  const reserves = result?.directions.filter((direction) => direction.kind === "reserve") ?? [];
+  const reservePercent = reserves.length === 1 && result ? effectivePercent(reserves[0], result.totals.availableHours) : null;
+  return <section className="project-totals project-totals-plan" aria-label="Итоги квартала">
+    <div className="project-total">
       <span className="project-total-label">Доступно команде <InfoHint info="available" /></span>
-      <strong>{totals ? hours(totals.availableHours) : "—"}</strong>
+      <strong>{result ? hours(result.totals.availableHours) : "—"}</strong>
       <span className="project-total-note">{members} {pluralRu(members, "сотрудник", "сотрудника", "сотрудников")} · после отсутствий и ставок</span>
     </div>
-    <div className="project-total project-total-demand">
-      <span className="project-total-label">Потребность по задачам <InfoHint info="demand" /></span>
-      <strong>{totals ? hours(totals.knownDemandHours) : "—"}</strong>
-      <span className="project-total-note">{totals && !totals.demandComplete
-        ? <><span className="project-chip preliminary">Предварительно</span>{totals.missingEstimateCount} {pluralRu(totals.missingEstimateCount, "задача", "задачи", "задач")} без оценки</>
-        : `${tasks} ${pluralRu(tasks, "задача", "задачи", "задач")}`}</span>
+    <div className="project-total">
+      <span className="project-total-label">Резерв на встречи <InfoHint info="reserve" /></span>
+      <strong>{plan && plan.reserveCount ? hours(plan.reserveHours) : "—"}</strong>
+      <span className="project-total-note">{!plan ? "" : !plan.reserveCount ? "не задан"
+        : `${reservePercent !== null ? `${formatPercent(reservePercent)} · ` : ""}${reserves.length === 1 ? reserves[0].name : `${reserves.length} резерва`}${reserves.some((row) => row.ownPercentCount) ? ", с долями сотрудников" : ""}`}</span>
     </div>
-    <div className="project-total project-total-remaining">
-      <span className="project-total-label">Остаток после задач <InfoHint info="remaining" /></span>
-      <strong className={totals?.remainingStatus === "deficit" ? "project-negative" : totals ? "project-positive" : ""}>
-        {totals ? formatBalanceHours(totals.remainingHours, hours) : "—"}</strong>
-      <span className="project-total-note">
-        {totals && !totals.demandComplete && <span className="project-chip preliminary">Предварительно</span>}
-        {deficits.length > 0 ? <>
-          <span className="project-chip deficit">Дефицит в {deficits.length} {pluralRu(deficits.length, "направлении", "направлениях", "направлениях")}</span>
-          <button type="button" className="project-link-button" onClick={onShowBalance}>
-            {deficits.length === 1 ? deficits[0].name || "Направление без названия" : "Показать"}</button>
-        </> : totals && snapshot.directions.length > 0 ? "Дефицита по направлениям нет" : null}
-      </span>
+    <div className="project-total">
+      <span className="project-total-label">Занято работами <InfoHint info="planned" /></span>
+      <strong>{plan ? <>{plan.plannedMissingEstimateCount ? <span className="pp-q">не менее </span> : null}{hours(plan.plannedKnownHours)}</> : "—"}</strong>
+      <span className="project-total-note">{!plan ? "" : plan.plannedMissingEstimateCount
+        ? <Sign tone="unknown">{plan.plannedMissingEstimateCount} {pluralRu(plan.plannedMissingEstimateCount, "работа", "работы", "работ")} без оценки</Sign>
+        : plan.planCount ? "по оценкам работ в плане квартала" : "работ в плане нет"}</span>
+    </div>
+    <div className="project-total">
+      <span className="project-total-label">Остатки квот <InfoHint info="rest" /></span>
+      <strong>{plan ? <>{plan.plannedMissingEstimateCount && plan.remainingHours !== "0" ? <span className="pp-q">не более </span> : null}{hours(plan.remainingHours)}</> : "—"}</strong>
+      <span className="project-total-note">{!plan ? "" : plan.overrunSourceCount
+        ? <Sign tone="over">перебор {formatDeficitHours(plan.overrunHours, hours)} в {plan.overrunSourceCount} {pluralRu(plan.overrunSourceCount, "источнике", "источниках", "источниках")}</Sign>
+        : "закреплены за источниками"}</span>
+    </div>
+    <div className="project-total">
+      <span className="project-total-label">Не распределено <InfoHint info="unallocated" /></span>
+      <strong className={allocation?.overallocated ? "project-negative" : ""}>{allocation ? hours(allocation.unallocatedHours) : "—"}</strong>
+      <span className="project-total-note">{!allocation ? "" : allocation.overallocated
+        ? <Sign tone="over">сумма долей {formatPercent(allocation.allocatedPercent)}</Sign>
+        : `${formatPercent(allocation.unallocatedPercent)} ёмкости`}</span>
     </div>
   </section>;
-}
-
-function AllocationWarning({ snapshot, result }: Pick<EditorProps, "snapshot" | "result">) {
-  if (!result || result.allocation.status === "complete" || !snapshot.directions.length) return null;
-  return <div className="project-message warning" role="status">
-    Сумма долей — {numberText(result.allocation.totalPercent)}%, требуется 100%. Распределение можно сохранить как черновик; бюджеты направлений пока предварительные.
-  </div>;
 }
 
 function SectionHeading({ title, note, id, children }: { title: string; note: string; id?: string; children?: ReactNode }) {
@@ -336,11 +356,14 @@ function TeamEditor({ snapshot, update, result }: EditorProps) {
       }))}>Добавить сотрудника</button>
     </SectionHeading>
     {removeMember && <div className="project-message warning" role="alert">
-      <p>Удалить сотрудника «{removeMember.name || "Без имени"}» из этого квартала? Вместе с ним будут удалены связанные отсутствия ({snapshot.absences.filter((absence) => absence.memberId === removeId).length}).</p>
+      <p>Удалить сотрудника «{removeMember.name || "Без имени"}» из этого квартала? Вместе с ним будут удалены связанные отсутствия ({snapshot.absences.filter((absence) => absence.memberId === removeId).length}){snapshot.directions.some((direction) => direction.memberPercents.some((row) => row.memberId === removeId)) ? " и его своя доля в резерве" : ""}.</p>
       <div className="project-actions"><button className="secondary" type="button" onClick={() => setRemoveId(null)}>Отмена</button>
         <button className="danger" type="button" onClick={() => {
+          // Own reserve shares refer to the person: they go with them (DEC-038).
           update((current) => ({ ...current, members: current.members.filter((member) => member.id !== removeId),
-            absences: current.absences.filter((absence) => absence.memberId !== removeId) }));
+            absences: current.absences.filter((absence) => absence.memberId !== removeId),
+            directions: current.directions.map((direction) => ({ ...direction,
+              memberPercents: direction.memberPercents.filter((row) => row.memberId !== removeId) })) }));
           setRemoveId(null);
         }}>Удалить сотрудника и отсутствия</button></div>
     </div>}
@@ -484,86 +507,4 @@ function AbsenceEditor({ snapshot, update }: EditorProps) {
       {!snapshot.absences.length && <tr><td colSpan={4} className="project-table-empty">{snapshot.members.length ? "Отсутствия пока не добавлены." : "Сначала добавьте сотрудников во вкладке «Команда»."}</td></tr>}
     </tbody></table></div>
   </>;
-}
-
-function AllocationEditor({ snapshot, update, result }: EditorProps) {
-  const hasTasks = snapshot.tasks.length > 0;
-  const setDirection = (id: string, patch: Partial<QuarterSnapshot["directions"][number]>) => update((current) => ({ ...current,
-    directions: current.directions.map((direction) => direction.id === id ? { ...direction, ...patch } : direction)
-  }));
-  return <>
-    <SectionHeading title="Распределение часов" note="Доли применяются ко всем доступным часам команды; встречи — отдельное направление">
-      <button type="button" onClick={() => update((current) => ({ ...current, directions: [...current.directions, { id: newId(), name: "", percent: "0", kind: "work", memberPercents: [] }] }))}>Добавить направление</button>
-    </SectionHeading>
-    <AllocationWarning snapshot={snapshot} result={result} />
-    <div className="data-table-wrap"><table className="project-table"><thead><tr><th>Направление</th><th>Доля, % <InfoHint info="share" /></th><th className="project-number">Бюджет часов</th><th className="project-row-action"><span className="visually-hidden">Действия</span></th>
-    </tr></thead><tbody>
-      {snapshot.directions.map((direction, index) => {
-        const capacity = result?.directions.find((row) => row.directionId === direction.id);
-        const used = snapshot.tasks.some((task) => task.directionId === direction.id);
-        return <tr key={direction.id}>
-          <td><input className="project-wide-input" aria-label={`Название направления ${index + 1}`} value={direction.name} maxLength={1000} placeholder="Продукт, встречи, техдолг…" onChange={(event) => setDirection(direction.id, { name: event.target.value })} /></td>
-          <td><input className="project-decimal-input" aria-label={`Доля направления ${index + 1}`} inputMode="decimal" value={numberText(direction.percent ?? "")}
-            onChange={(event) => setDirection(direction.id, { percent: event.target.value.replace(",", ".") })}
-            onBlur={(event) => {
-              // A share not set yet stays «не задана» when the empty field loses focus.
-              if (direction.percent === null && event.target.value.trim() === "") return;
-              const value = finishDecimal(event.target.value);
-              if (value !== direction.percent) setDirection(direction.id, { percent: value });
-            }} /></td>
-          <td className="project-number">{capacity ? hours(capacity.budgetHours) : "—"}
-            {capacity && !capacity.budgetComplete && <div className="project-muted">Предварительный</div>}</td>
-          <td className="project-row-action"><DeleteButton disabled={used}
-            label={`Удалить направление ${direction.name.trim() || index + 1}`}
-            title={used ? "Перенесите/удалите задачи во вкладке «Задачи»" : "Удалить направление"}
-            onClick={() => update((current) => current.tasks.some((task) => task.directionId === direction.id) ? current
-              : { ...current, directions: current.directions.filter((item) => item.id !== direction.id) })} /></td>
-        </tr>;
-      })}
-      {!snapshot.directions.length && <tr><td colSpan={4} className="project-table-empty">Добавьте направления и распределите между ними 100% доступных часов.</td></tr>}
-    </tbody></table></div>
-    {result && <p className="project-table-footer">Сумма долей: <strong>{numberText(result.allocation.totalPercent)}%</strong>
-      {result.allocation.status === "complete" ? "Распределение заполнено." : "Для полного распределения требуется 100%."}</p>}
-    {hasTasks && <p className="project-muted">Направление с задачами удалить нельзя. Перенесите/удалите задачи во вкладке «Задачи».</p>}
-    <BalanceSummary snapshot={snapshot} result={result} />
-  </>;
-}
-
-function BalanceSummary({ snapshot, result }: Pick<EditorProps, "snapshot" | "result">) {
-  const statusLabels = { surplus: "Остаток", balanced: "Баланс", deficit: "Дефицит", preliminary: "Предварительно" };
-  return <section className="project-balance-summary" aria-labelledby="direction-summary-title">
-    <SectionHeading id="direction-summary-title" title="Баланс направлений" note="Бюджет, потребность по задачам и остаток за квартал" />
-    <div className="data-table-wrap"><table className="project-table project-direction-summary" aria-label="Баланс направлений">
-      <thead><tr><th>Направление</th>
-        <th className="project-number">Бюджет <InfoHint info="budget" /></th>
-        <th className="project-number">Потребность <InfoHint info="directionDemand" /></th>
-        <th className="project-number">Баланс <InfoHint info="balance" /></th>
-        <th>Статус <InfoHint info="status" /></th></tr></thead>
-      <tbody>{snapshot.directions.map((direction) => {
-        const capacity = result?.directions.find((row) => row.directionId === direction.id);
-        const balance = capacity ? describeDirectionBalance(capacity, hours) : null;
-        const cells = capacity ? describeScreenBalanceCells(capacity, hours) : null;
-        return <tr key={direction.id} data-direction-id={direction.id} data-status={balance?.status ?? "unavailable"}
-          className={balance?.deficit ? "project-deficit-row" : undefined}>
-          <td>{direction.name || "Направление без названия"}</td>
-          <td className="project-number project-direction-budget">{capacity ? hours(capacity.budgetHours) : "—"}
-            {capacity && !capacity.budgetComplete && <div className="project-muted">Предварительный</div>}</td>
-          <td className="project-number project-direction-demand" aria-label={`Потребность направления ${direction.name}`}>
-            {cells?.demand.label && <span className="project-balance-label">{cells.demand.label}</span>}
-            <strong className="project-balance-value">{cells?.demand.text ?? "—"}</strong>
-          </td>
-          <td className={`project-number project-direction-balance${balance?.deficit ? " project-deficit" : ""}`} aria-label={`Баланс направления ${direction.name}`}>
-            {cells?.balance.label && <span className="project-balance-label">{cells.balance.label}</span>}
-            <strong className="project-balance-value">{cells?.balance.text ?? "—"}</strong>
-          </td>
-          <td className="project-direction-status"><span className={`project-balance-status ${balance?.status ?? "unavailable"}`}>{balance ? statusLabels[balance.status] : "Нет расчёта"}</span>
-            {(balance?.note || !balance) && <p className="project-balance-note">{balance?.note || "Исправьте незаполненные или некорректные данные плана."}</p>}
-          </td>
-        </tr>;
-      })}
-      {!snapshot.directions.length && <tr><td colSpan={5} className="project-table-empty">Свод появится после добавления направлений.</td></tr>}
-      </tbody>
-    </table></div>
-    <p className="project-muted project-balance-limitation">Остаток общих часов не подтверждает достаточность каждой компетенции: оценки задач не разбиты по специальностям.</p>
-  </section>;
 }

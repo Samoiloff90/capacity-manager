@@ -2,8 +2,10 @@ import { createProject, openProject, PROJECT_SCHEMA_VERSION, type FormatUpgrade,
 import type { Quarter } from "../domain/capacity/calendar-quarter";
 import { createQuarterCalendar, type CalendarMode } from "../domain/capacity/project-calendar";
 import { normalizeSnapshotDecimals } from "../domain/capacity/draft-normalize";
+import { formatScreenHours } from "../domain/capacity/input-format";
 import { copyQuarterSetup } from "../domain/capacity/quarter-copy";
 import { calculateQuarterCapacity } from "../domain/capacity/quarter-capacity.calculator";
+import { describeSaveProblems } from "../domain/capacity/source-plan";
 import type { CalculateQuarterCapacityResult, QuarterSnapshot } from "../domain/capacity/quarter-capacity.types";
 import { validateQuarterSnapshot } from "../domain/capacity/quarter-snapshot.validation";
 import { buildQuarterReport, type QuarterReport } from "../export/quarter-report";
@@ -26,6 +28,33 @@ export function quarterTitle(period: { year: number; quarter: Quarter }): string
 export const FORMAT_UPGRADE_MESSAGE = "После обновления формата этот файл нельзя будет открыть в версии 0.3.0. "
   + "Перед сохранением будет создана резервная копия исходного проекта.";
 
+/**
+ * A new work typed into the form of one source and not added yet (QUARTER_PLANNING_UX.md,
+ * «Незаконченный ввод»). Kept per quarter and source while the project is open; never
+ * written to the project file.
+ */
+export type WorkInput = Readonly<{
+  planId: string;
+  sourceId: string;
+  /** Named in the warning when closing the project would lose the input. */
+  sourceName: string;
+  quarter: string;
+  name: string;
+  estimate: string;
+  link: string;
+  comment: string;
+  mark: "candidate" | "plan";
+  /** The mark was taken from the last work added to this source. */
+  remembered: boolean;
+  open: boolean;
+}>;
+
+export const workInputKey = (planId: string, sourceId: string) => `${planId}:${sourceId}`;
+
+export function isBlankWorkInput(input: Pick<WorkInput, "name" | "estimate" | "link" | "comment">): boolean {
+  return !input.name.trim() && !input.estimate.trim() && !input.link.trim() && !input.comment.trim();
+}
+
 export interface WorkspaceRepository {
   readonly session: Readonly<ProjectSession>;
   list(): Promise<StoredQuarterPlan[]>;
@@ -47,13 +76,19 @@ export interface WorkspaceState {
   closeProtectionReady: boolean;
   error: string;
   notice: string;
+  /** Shown beside the notice when a save leaves the plan unbalanced; the problem itself stays visible. */
+  warning: string;
   calculation: CalculateQuarterCapacityResult | null;
-  /** canSave: the dialog may offer "Сохранить и продолжить". */
-  confirmation: { message: string; canSave: boolean } | null;
+  /** canSave: the dialog may offer "Сохранить и продолжить"; details lists unfinished input that is lost. */
+  confirmation: { message: string; canSave: boolean; details: string[] } | null;
   /** Asked before the first write to a project of format 1; folderPath is where the backup goes. */
   formatUpgrade: { message: string; folderPath: string } | null;
   /** Whether the saved quarter can be exported; hint explains why not. */
   report: { available: boolean; hint: string };
+  /** Session memory of the planner, cleared with the project: see WorkInput. */
+  workInputs: Readonly<Record<string, WorkInput>>;
+  /** The last «Куда добавить» per quarter and source, while the project is open (DEC-037). */
+  lastMarks: Readonly<Record<string, WorkInput["mark"]>>;
 }
 
 interface Dependencies {
@@ -73,8 +108,8 @@ interface Dependencies {
 
 function emptyState(): WorkspaceState {
   return { project: null, plans: [], activePlanId: null, draft: null, dirty: false,
-    busy: false, closeProtectionReady: true, error: "", notice: "", calculation: null, confirmation: null,
-    formatUpgrade: null, report: { available: false, hint: "" } };
+    busy: false, closeProtectionReady: true, error: "", notice: "", warning: "", calculation: null, confirmation: null,
+    formatUpgrade: null, report: { available: false, hint: "" }, workInputs: {}, lastMarks: {} };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function projectName(name: string): string {
@@ -91,6 +126,8 @@ export class ProjectWorkspaceController {
   private state = emptyState();
   private readonly listeners = new Set<() => void>();
   private readonly pendingForms = new Set<string>();
+  // What a pending field still needs, said when a save is refused because of it.
+  private readonly pendingMessages = new Map<string, string>();
   private readonly deps: Dependencies;
   private repository: WorkspaceRepository | null = null;
   private operation: Promise<boolean> | null = null;
@@ -145,7 +182,7 @@ export class ProjectWorkspaceController {
     if (this.operation || !this.state.closeProtectionReady) return Promise.resolve(false);
     this.operationKind = kind;
     this.upgradeNotice = "";
-    this.publish({ busy: true, error: "", notice: "" });
+    this.publish({ busy: true, error: "", notice: "", warning: "" });
     const pending = Promise.resolve().then(task).catch((error: unknown) => {
       this.publish({ error: errorMessage(error) });
       return false;
@@ -158,27 +195,40 @@ export class ProjectWorkspaceController {
     return pending;
   }
 
-  /** Runs inside the calling operation; a failed save throws, so the transition does not happen. */
-  private async canDiscard(): Promise<boolean> {
-    if (!this.state.dirty) return true;
+  /** Unfinished input of new works, named for the dialog; blank forms are not listed. */
+  private unfinishedInputs(): string[] {
+    return Object.values(this.state.workInputs).filter((input) => !isBlankWorkInput(input))
+      .map((input) => `«${input.sourceName}», ${input.quarter}: ${input.name.trim() ? `«${input.name.trim()}»` : "работа без названия"}`);
+  }
+
+  /**
+   * Runs inside the calling operation; a failed save throws, so the transition does not happen.
+   * losesInputs: the project closes, so unfinished input of new works is lost too.
+   */
+  private async canDiscard(losesInputs = false): Promise<boolean> {
+    const details = losesInputs ? this.unfinishedInputs() : [];
+    if (!this.state.dirty && !details.length) return true;
     const saved = this.state.plans.find((plan) => plan.planId === this.state.activePlanId);
     // An unfinished team rename is not part of the quarter and cannot be saved from here.
-    const canSave = Boolean(this.repository && this.state.draft && saved && this.pendingForms.size === 0);
-    const message = canSave && saved
-      ? `В квартале «${quarterTitle(saved.snapshot)}» есть несохранённые изменения. Сохранить их перед продолжением?`
-      : "Есть несохранённые изменения. Если продолжить, они будут потеряны.";
+    const canSave = this.state.dirty && Boolean(this.repository && this.state.draft && saved && this.pendingForms.size === 0);
+    const lost = details.length ? " Незаконченный ввод работ в файл проекта не сохраняется и будет потерян:" : "";
+    const message = !this.state.dirty
+      ? "Незаконченный ввод работ в файл проекта не сохраняется и будет потерян:"
+      : canSave && saved
+        ? `В квартале «${quarterTitle(saved.snapshot)}» есть несохранённые изменения. Сохранить их перед продолжением?${lost}`
+        : `Есть несохранённые изменения. Если продолжить, они будут потеряны.${lost}`;
     const answer = this.deps.confirmDiscard
       ? await this.deps.confirmDiscard(message, canSave)
       : await new Promise<DiscardAnswer>((resolve) => {
         this.resolveDiscard = resolve;
-        this.publish({ confirmation: { message, canSave } });
+        this.publish({ confirmation: { message, canSave, details } });
       });
     if (answer !== "save") return answer;
     if (!canSave) return false;
     // Declining the format upgrade cancels the transition too: nothing was saved.
     if (!await this.persistDraft()) return false;
     // Named, because the next screen may be another quarter or project.
-    if (saved) this.publish({ notice: `${this.upgradeNotice}Изменения квартала «${quarterTitle(saved.snapshot)}» сохранены.` });
+    if (saved) this.publish({ notice: `${this.upgradeNotice}Изменения квартала «${quarterTitle(saved.snapshot)}» сохранены.`, warning: "" });
     return true;
   }
 
@@ -213,7 +263,11 @@ export class ProjectWorkspaceController {
     const { draft, activePlanId } = this.state;
     const saved = this.state.plans.find((plan) => plan.planId === activePlanId);
     if (!this.repository || !draft || !saved) throw new Error("Сначала выберите квартал.");
-    if (this.pendingForms.size) throw new Error("Сначала завершите редактирование названия команды.");
+    if (this.pendingForms.has(PROJECT_NAME_FORM)) throw new Error("Сначала завершите редактирование названия команды.");
+    if (this.pendingForms.size) {
+      const [message] = [...this.pendingForms].map((key) => this.pendingMessages.get(key)).filter(Boolean);
+      throw new Error(`Не удалось сохранить. ${message ?? "Исправьте поля, отмеченные ошибкой."}`);
+    }
     const captured = normalizeSnapshotDecimals(clone(draft));
     const checked = validateQuarterSnapshot(captured);
     if (!checked.ok) {
@@ -224,14 +278,24 @@ export class ProjectWorkspaceController {
     if (!await this.ensureCurrentFormat()) return false;
     const stored = clone(await this.repository.save(saved.planId, saved.revision, captured));
     // Show the normalized values unless the draft was edited while saving.
-    const normalized = this.state.draft === draft ? { draft: clone(captured), calculation: calculateQuarterCapacity(captured) } : {};
+    const calculation = calculateQuarterCapacity(captured);
+    const normalized = this.state.draft === draft ? { draft: clone(captured), calculation } : {};
     this.publish({ plans: this.state.plans.map((plan) => plan.planId === stored.planId ? stored : plan), ...normalized });
-    this.publish({ notice: this.upgradeNotice + (this.state.dirty ? "Расчёт сохранён. Более поздние изменения ещё не сохранены." : "Расчёт сохранён в папке проекта.") });
+    // Saving does not balance the plan: an excess of shares or an overrun stays and is named.
+    const problems = calculation.ok ? describeSaveProblems(calculation.result, formatScreenHours) : [];
+    const title = quarterTitle(captured);
+    this.publish({
+      notice: this.upgradeNotice + (this.state.dirty
+        ? `Изменения квартала «${title}» сохранены. Более поздние изменения ещё не сохранены.`
+        : `Изменения квартала «${title}» сохранены.`),
+      warning: problems.length ? `Сохранение не балансирует план: ${problems.join("; ")}. Это остаётся видно в итогах и таблицах, пока вы не измените доли или состав плана.` : ""
+    });
     return true;
   }
 
   private select(plan: StoredQuarterPlan | undefined) {
     this.pendingForms.clear();
+    this.pendingMessages.clear();
     const draft = plan ? clone(plan.snapshot) : null;
     this.publish({ activePlanId: plan?.planId ?? null, draft,
       calculation: draft ? calculateQuarterCapacity(draft) : null });
@@ -253,7 +317,7 @@ export class ProjectWorkspaceController {
   }
 
   private async replaceProject(open: () => Promise<WorkspaceRepository>): Promise<boolean> {
-    if (!await this.canDiscard()) return false;
+    if (!await this.canDiscard(true)) return false;
     let candidate: WorkspaceRepository | null = null;
     try {
       candidate = await open();
@@ -263,8 +327,9 @@ export class ProjectWorkspaceController {
       await this.repository?.close({ discardFailedWrites: true });
       this.repository = candidate;
       this.pendingForms.clear();
+      this.pendingMessages.clear();
       // A backup made while saving the previous project stays named until the user reads it.
-      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim() });
+      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim(), workInputs: {}, lastMarks: {} });
       let preference: string | null = null;
       try { preference = this.deps.readSelectedPlan?.(candidate.session.projectId) ?? null; }
       catch { /* Optional application-local preference. */ }
@@ -305,10 +370,11 @@ export class ProjectWorkspaceController {
         try { await this.operation; } finally { this.closeRequested = false; }
       }
       return this.run("transition", async () => {
-        if (!await this.canDiscard()) return false;
+        if (!await this.canDiscard(true)) return false;
         await this.repository?.close({ discardFailedWrites: true });
         this.repository = null;
         this.pendingForms.clear();
+        this.pendingMessages.clear();
         this.publish({ ...emptyState(), busy: true, notice: this.upgradeNotice.trim() });
         return true;
       });
@@ -350,7 +416,7 @@ export class ProjectWorkspaceController {
       this.publish({ plans: [...this.state.plans, stored] });
       this.select(stored);
       this.publish({ notice: this.upgradeNotice + (source
-        ? `Квартал создан. Из квартала «${quarterTitle(source.snapshot)}» скопированы сотрудники, ставки, компетенции и направления; добавьте отсутствия и задачи.`
+        ? `Квартал создан. Из квартала «${quarterTitle(source.snapshot)}» скопированы сотрудники, ставки, компетенции, источники и доли; добавьте отсутствия и работы.`
         : "Квартал создан. Заполните команду и сохраните расчёт.") });
       return true;
     }),
@@ -387,11 +453,28 @@ export class ProjectWorkspaceController {
     updateDraft: (updater: (current: QuarterSnapshot) => QuarterSnapshot): void => {
       if (!this.state.draft || !this.state.closeProtectionReady || this.operationKind === "transition") return;
       const draft = clone(updater(clone(this.state.draft)));
-      this.publish({ draft, calculation: calculateQuarterCapacity(draft), notice: "", error: "" });
+      this.publish({ draft, calculation: calculateQuarterCapacity(draft), notice: "", warning: "", error: "" });
     },
-    setPendingFormDirty: (key: string, dirty: boolean): void => {
-      if (dirty) this.pendingForms.add(key); else this.pendingForms.delete(key);
+    /** A field whose text is not in the draft yet; message says what blocks saving meanwhile. */
+    setPendingFormDirty: (key: string, dirty: boolean, message?: string): void => {
+      if (dirty) {
+        this.pendingForms.add(key);
+        if (message) this.pendingMessages.set(key, message); else this.pendingMessages.delete(key);
+      } else {
+        this.pendingForms.delete(key);
+        this.pendingMessages.delete(key);
+      }
       this.publish({});
+    },
+    setWorkInput: (key: string, input: WorkInput | null): void => {
+      if (!this.state.project) return;
+      const workInputs = { ...this.state.workInputs };
+      if (input) workInputs[key] = input; else delete workInputs[key];
+      this.publish({ workInputs });
+    },
+    rememberMark: (key: string, mark: WorkInput["mark"]): void => {
+      if (!this.state.project) return;
+      this.publish({ lastMarks: { ...this.state.lastMarks, [key]: mark } });
     },
     answerDiscard: (answer: DiscardAnswer): void => {
       const resolve = this.resolveDiscard;
@@ -405,7 +488,7 @@ export class ProjectWorkspaceController {
       this.publish({ formatUpgrade: null });
       resolve?.(confirmed);
     },
-    clearMessage: (): void => this.publish({ error: "", notice: "" }),
+    clearMessage: (): void => this.publish({ error: "", notice: "", warning: "" }),
     setCloseProtectionReady: (ready: boolean): void => this.publish({ closeProtectionReady: ready }),
     reportError: (message: string): void => this.publish({ error: message })
   };

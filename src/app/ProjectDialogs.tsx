@@ -64,7 +64,7 @@ export function NewQuarterDialog({ plans, onCancel, onCreate }: {
               <option value="">Не копировать</option>
             </select></label>
           <span id="copy-source-note" className="project-muted">{source
-            ? "Сотрудники, ставки, компетенции, направления и доли. Отсутствия и задачи не копируются, календарь — новый для выбранного периода."
+            ? "Сотрудники, ставки, компетенции, источники и доли, резерв со своими долями сотрудников. Отсутствия и работы не копируются, календарь — новый для выбранного периода."
             : "Новый квартал начнётся с пустого состава и стандартного списка компетенций."}</span>
         </div>}
         {needsManual && <div className="project-message warning">
@@ -105,8 +105,9 @@ export function FormatUpgradeDialog({ message, folderPath, onAnswer }: {
   </div>;
 }
 
-export function DiscardDialog({ message, canSave, onAnswer }: {
-  message: string; canSave: boolean; onAnswer: (answer: DiscardAnswer) => void;
+/** The 0.3.0 dialog; details names unfinished input of new works that closing the project loses. */
+export function DiscardDialog({ message, details = [], canSave, onAnswer }: {
+  message: string; details?: readonly string[]; canSave: boolean; onAnswer: (answer: DiscardAnswer) => void;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -114,7 +115,9 @@ export function DiscardDialog({ message, canSave, onAnswer }: {
   useDialogFocus(dialog, canSave ? save : cancel, () => onAnswer(false));
   return <div className="project-modal-backdrop">
     <div ref={dialog} className="project-modal" role="alertdialog" aria-modal="true" aria-labelledby="discard-title" aria-describedby="discard-message">
-      <h2 id="discard-title">Несохранённые изменения</h2><p id="discard-message">{message}</p>
+      <h2 id="discard-title">Несохранённые изменения</h2>
+      <div id="discard-message" className="pp-confirm"><p>{message}</p>
+        {details.length > 0 && <ul>{details.map((line) => <li key={line}>{line}</li>)}</ul>}</div>
       <div className="project-actions project-dialog-actions">
         <button ref={cancel} className="secondary" type="button" onClick={() => onAnswer(false)}>Отмена</button>
         <button className="danger" type="button" onClick={() => onAnswer(true)}>Не сохранять</button>

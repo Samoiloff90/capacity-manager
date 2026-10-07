@@ -1,4 +1,5 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { INFO_TEXTS, type InfoKey } from "./info-texts";
 
 const iconProps = {
@@ -140,4 +141,13 @@ export function useDialogFocus(dialog: RefObject<HTMLElement>, initial: RefObjec
       restoreFocus(previous);
     };
   }, [dialog, initial]);
+}
+
+/** Id of the layer next to the page: while a dialog is open there, the page behind it is inert. */
+export const DIALOG_ROOT_ID = "project-dialog-root";
+
+/** A dialog opened from inside a tab is rendered outside the page, so inert does not reach it. */
+export function DialogPortal({ children }: { children: ReactNode }) {
+  const root = typeof document === "undefined" ? null : document.getElementById(DIALOG_ROOT_ID);
+  return root ? createPortal(children, root) : <>{children}</>;
 }
