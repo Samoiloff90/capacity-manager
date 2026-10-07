@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { StoredQuarterPlan } from "../db/project-snapshots";
 import type { Quarter } from "../domain/capacity/calendar-quarter";
 import type { CalendarMode } from "../domain/capacity/project-calendar";
@@ -9,8 +9,10 @@ import { useDialogFocus } from "./project-ui";
 
 const periodOf = (plan: StoredQuarterPlan) => ({ year: plan.snapshot.year, quarter: plan.snapshot.quarter });
 
-export function NewQuarterDialog({ plans, onCancel, onCreate }: {
+export function NewQuarterDialog({ plans, saveHint = 0, onCancel, onCreate }: {
   plans: readonly StoredQuarterPlan[];
+  /** Grows when Ctrl+S / ⌘S is pressed while this window is open. */
+  saveHint?: number;
   onCancel: () => void;
   onCreate: (year: number, quarter: Quarter, mode: CalendarMode, copyFromPlanId: string | null) => void;
 }) {
@@ -26,6 +28,9 @@ export function NewQuarterDialog({ plans, onCancel, onCreate }: {
   const dialog = useRef<HTMLDivElement>(null);
   const yearInput = useRef<HTMLInputElement>(null);
   useDialogFocus(dialog, yearInput, onCancel);
+  const [hint, setHint] = useState(false);
+  const firstHint = useRef(saveHint);
+  useEffect(() => { if (saveHint !== firstHint.current) setHint(true); }, [saveHint]);
 
   const year = Number(yearText);
   const validYear = /^\d{1,4}$/.test(yearText) && year >= 1 && year <= 9999;
@@ -72,6 +77,7 @@ export function NewQuarterDialog({ plans, onCancel, onCreate }: {
           <label className="project-checkbox project-confirmation"><input type="checkbox" checked={manualConfirmed}
             onChange={(event) => setManualConfirmed(event.target.checked)} />Я проверю праздники и переносы вручную во вкладке «Календарь»</label>
         </div>}
+        {hint && <p className="pp-hintline" role="status">Сначала создайте квартал или закройте это окно, затем сохраните квартал.</p>}
         <div className="project-actions project-dialog-actions">
           <button type="button" className="secondary" onClick={onCancel}>Отмена</button>
           <button type="submit" disabled={!canSubmit}

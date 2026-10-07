@@ -87,16 +87,6 @@ export function describeInclusion(source: QuarterDirectionCapacity, estimate: st
   return `После включения работы на ${format(estimate)} в плане будет ${describePlanned(after, format)}, ${rest}.`;
 }
 
-/** Shorter form for a row of a candidate: «В плане будет 216 ч, останется 34 ч». */
-export function describeInclusionShort(source: QuarterDirectionCapacity, estimate: string | null, format: HoursFormatter): string {
-  if (!source.quotaSet) return "Доля источника не задана";
-  const after = forecastSource(source, { add: [estimate] });
-  const rest = overrun(after)
-    ? `перебор ${lowerBound(after)}${formatDeficitHours(after.overrunHours, format)}`
-    : `останется ${upperBound(after)}${format(after.remainingHours)}`;
-  return estimate === null ? `Без оценки: ${rest}` : `В плане будет ${describePlanned(after, format)}, ${rest}`;
-}
-
 /** «Оценка: 28 ч → 34 ч. Остаток квоты станет 16 ч.» A new estimate replaces the old one (DEC-041). */
 export function describeEstimateChange(source: QuarterDirectionCapacity, before: string | null, after: string | null,
   inPlan: boolean, format: HoursFormatter): string | null {

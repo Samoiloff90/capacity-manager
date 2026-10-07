@@ -5,7 +5,7 @@ import { formatScreenHours } from "../src/domain/capacity/input-format";
 import { calculateQuarterCapacity } from "../src/domain/capacity/quarter-capacity.calculator";
 import type { QuarterCapacityResult, QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
 import {
-  describeAllocation, describeEstimateChange, describeInclusion, describeInclusionShort, describePlanned,
+  describeAllocation, describeEstimateChange, describeInclusion, describePlanned,
   describeQuotaDrops, describeRest, describeSaveProblems, effectivePercent, fillPercent, forecastSource,
   parseEstimateInput, parseShareInput, ratioPercent, sourceState
 } from "../src/domain/capacity/source-plan";
@@ -115,7 +115,7 @@ describe("control example of DEC-041 with the consequences shown on screen", () 
     const result = setup([...others, work("c", "ui", "28", "candidate"), work("o", "ui", "40", "out")]);
     const row = source(result, "ui");
     expect([row.knownDemandHours, row.planCount, row.candidateCount, row.candidateKnownHours, row.outCount]).toEqual(["200", 2, 1, "28", 1]);
-    expect(describeInclusionShort(row, "28", hours)).toBe("В плане будет 228 ч, останется 22 ч");
+    expect(describeInclusion(row, "28", hours)).toBe("После включения работы на 28 ч в плане будет 228 ч, останется 22 ч.");
     expect(describeEstimateChange(row, "28", "34", false, hours)).toBe("Оценка: 28 ч → 34 ч. Бюджет не занимает, пока работа не в плане квартала.");
   });
 

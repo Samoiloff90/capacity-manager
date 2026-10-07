@@ -11,7 +11,7 @@ import { hours, Kbd, Sign, useCommittedText } from "./plan-ui";
 
 type Snapshot = QuarterSnapshot;
 type Direction = Snapshot["directions"][number];
-type Update = (updater: (current: Snapshot) => Snapshot) => void;
+type Update = (updater: (current: Snapshot) => Snapshot, forPlanId?: string) => void;
 type SetPending = (key: string, dirty: boolean, message?: string) => void;
 
 const shareText = (percent: string | null) => percent === null ? "" : percent.replace(".", ",");
@@ -33,7 +33,7 @@ function NameCell({ direction, others, planId, update, setPending }: {
     value: direction.name, column: "name", show: (value) => value,
     parse: (text) => text.trim() ? { ok: true, value: text } : { ok: false, message: "Введите название источника." },
     commit: (name) => update((current) => ({ ...current,
-      directions: current.directions.map((item) => item.id === direction.id ? { ...item, name } : item) })),
+      directions: current.directions.map((item) => item.id === direction.id ? { ...item, name } : item) }), planId),
     setPending: (message) => setPending(key, message !== null, message ?? undefined)
   });
   const duplicate = field.text.trim() && others.some((item) => item.id !== direction.id
@@ -46,9 +46,9 @@ function NameCell({ direction, others, planId, update, setPending }: {
   </td>;
 }
 
-function ShareCell({ direction, planId, update, setPending, ownNote, savedNote, onOpenReserve }: {
+function ShareCell({ direction, planId, update, setPending, ownNote, savedNote, onOpenReserve, reserveDisabled }: {
   direction: Direction; planId: string; update: Update; setPending: SetPending;
-  ownNote: string | null; savedNote: string | null; onOpenReserve: (() => void) | null;
+  ownNote: string | null; savedNote: string | null; onOpenReserve: (() => void) | null; reserveDisabled: boolean;
 }) {
   const key = `source-share:${planId}:${direction.id}`;
   const name = direction.name.trim() || "без названия";
@@ -62,7 +62,7 @@ function ShareCell({ direction, planId, update, setPending, ownNote, savedNote, 
     // An unreadable share does not count until it is fixed (QUARTER_PLANNING_UX.md).
     invalid: { value: null },
     commit: (percent) => update((current) => ({ ...current,
-      directions: current.directions.map((item) => item.id === direction.id ? { ...item, percent } : item) })),
+      directions: current.directions.map((item) => item.id === direction.id ? { ...item, percent } : item) }), planId),
     setPending: (message) => setPending(key, message !== null, message ? `Доля источника «${name}»: ${message.toLowerCase()}` : undefined)
   });
   return <td className="project-number">
@@ -74,6 +74,7 @@ function ShareCell({ direction, planId, update, setPending, ownNote, savedNote, 
     {!field.error && !ownNote && direction.percent === null && <span className="pp-saved">не задана</span>}
     {savedNote && <span className="pp-saved changed">{savedNote}</span>}
     {onOpenReserve && <button type="button" className="project-link-button pp-reserve-link" id={`reserve-open-${direction.id}`}
+      disabled={reserveDisabled} title={reserveDisabled ? "Доли сотрудников — когда данные квартала заполнены и есть расчёт" : undefined}
       onClick={onOpenReserve}>Доли сотрудников…</button>}
   </td>;
 }
@@ -95,7 +96,10 @@ export function SourcesTab({ planId, quarter, snapshot, saved, result, savedResu
   const [applied, setApplied] = useState("");
   const [reserveId, setReserveId] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
-  useEffect(() => { onDialog(reserveId !== null); }, [reserveId, onDialog]);
+  // The window needs the calculation; without it the link is disabled, so the page is never left inert.
+  const reserveOpen = reserveId !== null && result !== null;
+  useEffect(() => { onDialog(reserveOpen); }, [reserveOpen, onDialog]);
+  useEffect(() => () => onDialog(false), [onDialog]);
   useEffect(() => {
     if (!focusId) return;
     const input = document.getElementById(`src-name-${focusId}`) as HTMLInputElement | null;
@@ -209,7 +213,8 @@ export function SourcesTab({ planId, quarter, snapshot, saved, result, savedResu
             <option value="reserve" disabled={hasWorks}>Резерв{hasWorks ? " (есть работы)" : ""}</option>
           </select></td>
           <ShareCell direction={direction} planId={planId} update={update} setPending={setPending} ownNote={ownNote} savedNote={savedNote}
-            onOpenReserve={direction.kind === "reserve" ? () => { setApplied(""); setReserveId(direction.id); } : null} />
+            onOpenReserve={direction.kind === "reserve" ? () => { setApplied(""); setReserveId(direction.id); } : null}
+            reserveDisabled={result === null} />
           <td className="project-number"><span className="pp-cellnum">{capacity?.quotaSet ? hours(capacity.budgetHours) : "—"}</span>
             {quotaChanged && before && <span className="pp-saved changed">сохранено: {before.quotaSet ? hours(before.budgetHours) : "—"}</span>}</td>
           <td className="project-number"><span className="pp-cellnum text">{planned}</span></td>

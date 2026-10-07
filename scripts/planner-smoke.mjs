@@ -267,7 +267,7 @@ try {
   // Candidates: include with consequence, undo from the confirmation; move out and back.
   await openSource("Продукт «Витрина»");
   assert.deepEqual(await head(), ["800 ч", "не менее 600 ч", "не более 200 ч"]);
-  assert.equal(plain(await evaluate(`${workRow("Отзывы покупателей")}.querySelector('.pp-effect').textContent`)), "В плане будет не менее 760 ч, останется не более 40 ч");
+  assert.equal(plain(await evaluate(`${workRow("Отзывы покупателей")}.querySelector('.pp-effect').textContent`)), "После включения работы на 160 ч в плане будет не менее 760 ч, останется не более 40 ч.");
   await evaluate(`${workRow("Отзывы покупателей")}.querySelector('.pp-action').click()`);
   await waitFor("Boolean(document.querySelector('.pp-ghost'))", "confirmation after including");
   assert.match(await textOf(".pp-ghost"), /^Включено в план квартала: «Отзывы покупателей», 160 ч\. Остаток квоты: не более 40 ч.s?Отменить$/);
@@ -317,6 +317,12 @@ try {
   await waitFor(`${shareInput("Техдолг")}.value === '10'`, "Esc restored the share");
   assert.match((await sourcesRow("Техдолг"))[3], /^200 ч/);
   step("unreadable share: error at the field, not counted, save refused with its name; Esc restored 10");
+  await type(`#${debtId}`, "двадцать");
+  await tab("План квартала");
+  await tab("Источники и доли");
+  assert.equal(await evaluate(`${shareInput("Техдолг")}.value`), "10");
+  assert.match((await sourcesRow("Техдолг"))[3], /^200 ч/);
+  step("leaving the tab with an unreadable share puts back the last share that was understood (10)");
 
   // Restoring the share changed the quarter, so the refused-save error is gone by itself.
   assert.equal(await evaluate("Boolean(document.querySelector('.project-message.error'))"), false);
@@ -405,6 +411,28 @@ try {
     "Остатки квот": "224 ч", "Не распределено": "179,20 ч"
   });
   step("new project: quarter, a person, a work source 50% and a reserve 10%");
+  // Without a calculation (a person without a name) the reserve window is not offered and the
+  // work form still opens, saying the consequence will come later.
+  await tab("Команда");
+  await click("Добавить сотрудника");
+  await waitFor("Boolean(document.querySelector('.project-message.warning'))", "calculation waits for the data");
+  await tab("Источники и доли");
+  assert.equal(await evaluate(`document.querySelector(${js(`#${secondId.replace("src-name-", "reserve-open-")}`)}).disabled`), true);
+  await tab("План квартала");
+  await openSource("Поддержка");
+  await click("Добавить работу");
+  await waitFor("Boolean(document.querySelector('.pp-form[data-form=add]'))", "form without a calculation");
+  assert.equal(await textOf(".pp-form[data-form=add] .pp-effect-line"), "На рассмотрение: бюджет не займёт, пока вы не включите работу в план квартала.");
+  await type("#add-estimate", "8");
+  assert.equal(await textOf(".pp-form[data-form=add] .pp-effect-line"), "Последствие появится после заполнения данных квартала.");
+  await type("#add-estimate", "");
+  await key("#add-name", "Escape");
+  await waitFor("!document.querySelector('.pp-form[data-form=add]')", "form closed");
+  await tab("Команда");
+  await clickSelector('[aria-label="Удалить сотрудника 2"]');
+  await click("Удалить сотрудника и отсутствия");
+  await waitFor("!document.querySelector('.project-message.warning')", "calculation back");
+  step("without a calculation: «Доли сотрудников…» disabled, the work form opens and says the consequence comes later");
   await tab("План квартала");
   await openSource("Поддержка");
   await click("Добавить работу");
@@ -415,7 +443,7 @@ try {
   await clickSelector("#add-submit");
   await waitFor(`Boolean(${workRow("Разбор обращений")})`, "work on review");
   assert.deepEqual(await head(), ["224 ч", "0 ч", "224 ч"]);
-  assert.equal(plain(await evaluate(`${workRow("Разбор обращений")}.querySelector('.pp-effect').textContent`)), "В плане будет 16 ч, останется 208 ч");
+  assert.equal(plain(await evaluate(`${workRow("Разбор обращений")}.querySelector('.pp-effect').textContent`)), "После включения работы на 16 ч в плане будет 16 ч, останется 208 ч.");
   await evaluate(`${workRow("Разбор обращений")}.querySelector('.pp-action').click()`);
   await waitFor(`(${workRow("Разбор обращений")})?.classList.contains('plan')`, "included");
   assert.deepEqual(await head(), ["224 ч", "16 ч", "208 ч"]);

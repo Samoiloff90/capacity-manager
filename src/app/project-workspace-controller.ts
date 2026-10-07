@@ -195,10 +195,19 @@ export class ProjectWorkspaceController {
     return pending;
   }
 
-  /** Unfinished input of new works, named for the dialog; blank forms are not listed. */
+  /**
+   * Unfinished input of new works, named for the dialog with the source's current name; blank
+   * forms and forms of sources deleted since are not listed.
+   */
   private unfinishedInputs(): string[] {
-    return Object.values(this.state.workInputs).filter((input) => !isBlankWorkInput(input))
-      .map((input) => `«${input.sourceName}», ${input.quarter}: ${input.name.trim() ? `«${input.name.trim()}»` : "работа без названия"}`);
+    return Object.values(this.state.workInputs).filter((input) => !isBlankWorkInput(input)).flatMap((input) => {
+      const quarter = input.planId === this.state.activePlanId ? this.state.draft
+        : this.state.plans.find((plan) => plan.planId === input.planId)?.snapshot;
+      const source = quarter?.directions.find((direction) => direction.id === input.sourceId);
+      if (quarter && !source) return [];
+      const name = source?.name.trim() || input.sourceName;
+      return [`«${name}», ${input.quarter}: ${input.name.trim() ? `«${input.name.trim()}»` : "работа без названия"}`];
+    });
   }
 
   /**
@@ -450,8 +459,10 @@ export class ProjectWorkspaceController {
       this.publish({ project: clone(project), notice: "Название команды сохранено." });
       return true;
     }),
-    updateDraft: (updater: (current: QuarterSnapshot) => QuarterSnapshot): void => {
+    /** forPlanId: a change meant for this quarter only; it is dropped once another quarter is open. */
+    updateDraft: (updater: (current: QuarterSnapshot) => QuarterSnapshot, forPlanId?: string): void => {
       if (!this.state.draft || !this.state.closeProtectionReady || this.operationKind === "transition") return;
+      if (forPlanId !== undefined && forPlanId !== this.state.activePlanId) return;
       const draft = clone(updater(clone(this.state.draft)));
       this.publish({ draft, calculation: calculateQuarterCapacity(draft), notice: "", warning: "", error: "" });
     },

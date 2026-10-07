@@ -108,7 +108,7 @@ export default function ProjectApp() {
   const saveFromKeyboard = useRef<() => void>(() => undefined);
   saveFromKeyboard.current = () => {
     // Inside the reserve window Ctrl+S does not save: the window asks to finish with it first.
-    if (tabDialog) { setSaveHint((count) => count + 1); return; }
+    if (tabDialog || (creatingQuarter && state.project)) { setSaveHint((count) => count + 1); return; }
     if (disabled || state.confirmation || state.formatUpgrade || creatingQuarter || renaming || !state.draft || !state.dirty) return;
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     focused?.blur();
@@ -283,7 +283,7 @@ export default function ProjectApp() {
     </div>
     <div id={DIALOG_ROOT_ID} />
     {helpOpen && state.project && <HelpDialog onClose={() => setHelpOpen(false)} onGoToTab={(next) => { setHelpOpen(false); setTab(next); }} />}
-    {creatingQuarter && state.project && <NewQuarterDialog plans={state.plans} onCancel={() => setCreatingQuarter(false)}
+    {creatingQuarter && state.project && <NewQuarterDialog plans={state.plans} saveHint={saveHint} onCancel={() => setCreatingQuarter(false)}
       onCreate={(year, quarter, mode, copyFrom) => { void createQuarter(year, quarter, mode, copyFrom); }} />}
     {state.confirmation && <DiscardDialog message={state.confirmation.message} details={state.confirmation.details}
       canSave={state.confirmation.canSave} onAnswer={actions.answerDiscard} />}

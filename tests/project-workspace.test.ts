@@ -970,9 +970,15 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
   });
   const key = workInputKey("q1", "ui");
   const lost = "Незаконченный ввод работ в файл проекта не сохраняется и будет потерян:";
+  /** Q1 with the source the unfinished input belongs to. */
+  const withSource = () => {
+    const q1 = savedPlan("q1", 1);
+    const snapshot = { ...q1.snapshot, directions: [{ id: "ui", name: "Запросы УИ", percent: null, kind: "work" as const, memberPercents: [] }] };
+    return new MemoryRepository([{ ...q1, snapshot }, savedPlan("q2", 2)]);
+  };
 
   it("keeps unfinished input of a new work across quarters and asks before the project closes", async () => {
-    const { controller } = workspace();
+    const { controller } = workspace(withSource());
     await controller.actions.openProject(folderA);
     await controller.actions.selectPlan("q1");
     controller.actions.setWorkInput(key, input("Выгрузка для бухгалтерии"));
@@ -1000,7 +1006,7 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
   });
 
   it("lists the unfinished input in the same dialog as unsaved changes of the quarter", async () => {
-    const { controller } = workspace();
+    const { controller } = workspace(withSource());
     await controller.actions.openProject(folderA);
     await controller.actions.selectPlan("q1");
     changeFte(controller, "0.5");
@@ -1044,6 +1050,32 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
     expect(repository.rows.get("q1")?.snapshot.tasks).toHaveLength(1);
     changeFte(controller, "0.5");
     expect(controller.getSnapshot()).toMatchObject({ notice: "", warning: "" });
+  });
+
+  it("a change meant for one quarter is dropped once another quarter is open", async () => {
+    const { controller } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    expect(await controller.actions.selectPlan("q2")).toBe(true);
+    controller.actions.updateDraft((draft) => ({ ...draft, members: draft.members.map((member) => ({ ...member, fte: "0.5" })) }), "q1");
+    expect(controller.getSnapshot()).toMatchObject({ activePlanId: "q2", dirty: false });
+    controller.actions.updateDraft((draft) => ({ ...draft, members: draft.members.map((member) => ({ ...member, fte: "0.5" })) }), "q2");
+    expect(controller.getSnapshot().dirty).toBe(true);
+  });
+
+  it("names unfinished input by the current source name and forgets sources deleted since", async () => {
+    const { controller } = workspace();
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    controller.actions.updateDraft((draft) => ({ ...draft, directions: [
+      { id: "ui", name: "УИ новое имя", percent: null, kind: "work", memberPercents: [] }
+    ] }));
+    controller.actions.setWorkInput(key, input("Отчёт"));
+    controller.actions.setWorkInput(workInputKey("q1", "gone"), input("Ничей", { sourceId: "gone", sourceName: "Удалённый" }));
+    const closing = controller.actions.closeProject();
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation?.details).toEqual(["«УИ новое имя», 1 квартал 2026 года: «Отчёт»"]));
+    controller.actions.answerDiscard(false);
+    expect(await closing).toBe(false);
   });
 
   it("a field whose text is not understood blocks the save and says which one", async () => {

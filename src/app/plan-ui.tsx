@@ -97,24 +97,36 @@ export function useCommittedText<T>(options: {
   const atFocus = useRef(text);
   const pending = useRef(setPending);
   pending.current = setPending;
+  // The last value the field understood: restored if the field goes away with unreadable text.
+  const lastGood = useRef(value);
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  const errorRef = useRef(false);
 
   // The draft changed elsewhere (undo, another field): show it unless the user is typing here.
   useEffect(() => {
-    if (!focused.current && !error) setText(show(value));
+    if (!focused.current && !error) { setText(show(value)); lastGood.current = value; }
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A field that disappears with unparsed text must not keep blocking the save.
-  useEffect(() => () => pending.current(null), []);
+  // A field that disappears with unparsed text must not keep blocking the save, and must not
+  // leave its stand-in value either: the last understood value comes back.
+  useEffect(() => () => {
+    pending.current(null);
+    if (errorRef.current && invalid) commitRef.current(lastGood.current);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function change(next: string) {
     setText(next);
     const parsed = parse(next);
     if (parsed.ok) {
       setError("");
+      errorRef.current = false;
+      lastGood.current = parsed.value;
       setPending(null);
       commit(parsed.value);
     } else {
       setError(parsed.message);
+      errorRef.current = true;
       setPending(parsed.message);
       if (invalid) commit(invalid.value);
     }

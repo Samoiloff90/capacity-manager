@@ -4,7 +4,7 @@ import type { QuarterCapacityResult, QuarterDirectionCapacity, QuarterSnapshot, 
 import { isWebLink, QUARTER_INPUT_LIMITS } from "../domain/capacity/quarter-snapshot.validation";
 import { pluralRu } from "../domain/capacity/quarter-totals";
 import {
-  describeAllocation, describeEstimateChange, describeInclusion, describeInclusionShort, describePlanned, describeRest,
+  describeAllocation, describeEstimateChange, describeInclusion, describePlanned, describeRest,
   describeRestAfterInclusion, effectivePercent, fillPercent, formatPercent, parseEstimateInput, sameOnScreen, sourceState, ZERO_ESTIMATE_NOTE,
   type SourceState
 } from "../domain/capacity/source-plan";
@@ -160,7 +160,7 @@ function Overview({ planId, snapshot, result, workInputs, onOpen, onGoToTab }: P
           }
           const state = capacity ? sourceState(capacity) : null;
           const fill = capacity ? fillPercent(capacity) : null;
-          const over = state ? state.overrunHours !== "0" : false;
+          const over = Boolean(capacity?.quotaSet && state && state.overrunHours !== "0");
           const candidates = capacity?.candidateCount
             ? <>{works(capacity.candidateCount)}<span className="pp-sub">{[capacity.candidateKnownHours !== "0" ? hours(capacity.candidateKnownHours) : "",
               capacity.candidateMissingEstimateCount ? `${capacity.candidateMissingEstimateCount} без оценки` : ""].filter(Boolean).join(" и ")}</span></>
@@ -237,7 +237,7 @@ function SourceWorkspace(props: WorkspaceProps) {
   const out = list.filter((task) => task.mark === "out");
   const state = capacity ? sourceState(capacity) : null;
   const was = before && before.sourceId === source.id && state ? before.state : null;
-  const over = state ? state.overrunHours !== "0" : false;
+  const over = Boolean(capacity?.quotaSet && state && state.overrunHours !== "0");
   const fill = capacity ? fillPercent(capacity) : null;
   const effective = capacity && result ? effectivePercent(capacity, result.totals.availableHours) : null;
 
@@ -308,6 +308,7 @@ function SourceWorkspace(props: WorkspaceProps) {
     try {
       await navigator.clipboard.writeText(work.link);
       setCopied({ id: work.id, ok: true });
+      setFocusTarget(`[data-menu-for="${work.id}"]`);
     } catch {
       setCopied({ id: work.id, ok: false });
     }
@@ -331,9 +332,10 @@ function SourceWorkspace(props: WorkspaceProps) {
   const formOpen = Boolean(input?.open);
   const draftClosed = input && !input.open && !isBlankWorkInput(input);
 
+  const undoLast = () => { props.onUndo(); setFocusTarget(input?.open ? "#add-name" : "#btn-add"); };
   const ghostAt = (mark: TaskMark) => ghost && ghost.sourceId === source.id && ghost.at?.mark === mark ? ghost : null;
   const ghostLine = (item: Ghost) => <div className="pp-ghost" role="status"><Sign tone="plain">{item.text}</Sign>
-    {item.undo && undo && <button type="button" className="project-link-button" onClick={props.onUndo}>Отменить</button>}</div>;
+    {item.undo && undo && <button type="button" className="project-link-button" onClick={undoLast}>Отменить</button>}</div>;
   const withGhost = (rows: ReactNode[], mark: TaskMark) => {
     const item = ghostAt(mark);
     if (item?.at) rows.splice(Math.min(item.at.index, rows.length), 0, <div key="ghost">{ghostLine(item)}</div>);
@@ -341,7 +343,7 @@ function SourceWorkspace(props: WorkspaceProps) {
   };
 
   const row = (work: Work) => {
-    if (edit?.id === work.id && capacity) {
+    if (edit?.id === work.id) {
       return <EditWorkForm key={work.id} work={work} capacity={capacity} edit={edit} setEdit={setEdit}
         onCancel={() => { setEdit(null); setFocusTarget(`[data-menu-for="${work.id}"]`); }} onSave={(patch) => saveEdit(work, patch)} />;
     }
@@ -358,7 +360,7 @@ function SourceWorkspace(props: WorkspaceProps) {
       </div>
       <div className="pp-est">{work.estimateHours === null ? <Sign tone="unknown">Без оценки</Sign> : hours(work.estimateHours)}</div>
       {work.mark === "candidate" && capacity
-        ? <div className="pp-effect">{describeInclusionShort(capacity, work.estimateHours, hours)}</div>
+        ? <div className="pp-effect">{describeInclusion(capacity, work.estimateHours, hours)}</div>
         : <div className="pp-effect pp-cell-empty" />}
       {work.mark === "candidate"
         ? <button type="button" className="secondary pp-action" onClick={() => include(work)}>Включить в план квартала</button>
@@ -401,8 +403,8 @@ function SourceWorkspace(props: WorkspaceProps) {
       </div>
       <FillBar percent={fill} over={over} />
     </section>
-    {formOpen && input && capacity && <AddWorkForm key={key} source={source} capacity={capacity} input={input} works={list}
-      added={props.added?.sourceId === source.id ? props.added.text : null} canUndo={Boolean(undo)} onUndo={props.onUndo}
+    {formOpen && input && <AddWorkForm key={key} source={source} capacity={capacity} input={input} works={list}
+      added={props.added?.sourceId === source.id ? props.added.text : null} canUndo={Boolean(undo)} onUndo={undoLast}
       onChange={(patch) => props.setWorkInput(key, { ...input, ...patch })}
       onClose={closeForm}
       onClear={() => { props.setWorkInput(key, { ...input, name: "", estimate: "", link: "", comment: "" }); props.setAdded(null); setFocusTarget("#add-name"); }}
@@ -499,7 +501,7 @@ function checkWork(fields: { name: string; estimate: string; link: string; comme
 }
 
 function AddWorkForm({ source, capacity, input, works: existing, added, canUndo, onUndo, onChange, onClose, onClear, onAdd }: {
-  source: Direction; capacity: QuarterDirectionCapacity; input: WorkInput; works: readonly Work[];
+  source: Direction; capacity: QuarterDirectionCapacity | undefined; input: WorkInput; works: readonly Work[];
   added: string | null; canUndo: boolean; onUndo: () => void;
   onChange: (patch: Partial<WorkInput>) => void; onClose: () => void; onClear: () => void;
   onAdd: (work: Work, text: string) => void;
@@ -518,10 +520,14 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
       : <span><b>На рассмотрение:</b> бюджет не займёт, пока вы не включите работу в план квартала.</span>;
   } else if (estimate.kind === "invalid") {
     effect = <span className="project-muted">Последствие появится, когда оценка будет понятна.</span>;
+  } else if (!capacity) {
+    effect = <span className="project-muted">Последствие появится после заполнения данных квартала.</span>;
   } else {
     const hoursValue = estimate.kind === "hours" ? estimate.hours : null;
-    effect = toPlan ? <Sign tone={describeInclusion(capacity, hoursValue, hours).includes("перебор") ? "over" : "fits"}>{describeInclusion(capacity, hoursValue, hours)}</Sign>
-      : <span><b>Бюджет не займёт.</b> <span className="project-muted">Если включить в план:</span> {describeInclusionShort(capacity, hoursValue, hours)}.</span>;
+    const text = describeInclusion(capacity, hoursValue, hours);
+    const tone = !capacity.quotaSet || hoursValue === null ? "unknown" : text.includes("перебор") ? "over" : "fits";
+    effect = toPlan ? <Sign tone={tone}>{text}</Sign>
+      : <span><b>Бюджет не займёт.</b> <span className="project-muted">Если включить в план:</span> {text}</span>;
   }
 
   function submit() {
@@ -535,7 +541,7 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
       estimateHours: parsed.kind === "hours" ? parsed.hours : null, mark: input.mark,
       link: input.link.trim() || null, comment: input.comment.trim() || null
     };
-    const after = toPlan ? describeAfter(capacity, work.estimateHours) : "";
+    const after = toPlan && capacity ? describeAfter(capacity, work.estimateHours) : "";
     onAdd(work, `Добавлено ${toPlan ? "в план квартала" : "на рассмотрение"}: «${work.name}», ${estimateText(work)}.${after}`);
     setTried(false);
     setTouched({});
@@ -595,7 +601,7 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
 }
 
 function EditWorkForm({ work, capacity, edit, setEdit, onCancel, onSave }: {
-  work: Work; capacity: QuarterDirectionCapacity; edit: EditState; setEdit: (edit: EditState) => void;
+  work: Work; capacity: QuarterDirectionCapacity | undefined; edit: EditState; setEdit: (edit: EditState) => void;
   onCancel: () => void; onSave: (patch: Pick<Work, "name" | "estimateHours" | "link" | "comment">) => void;
 }) {
   const errors = checkWork(edit);
@@ -603,6 +609,7 @@ function EditWorkForm({ work, capacity, edit, setEdit, onCancel, onSave }: {
   const estimate = parseEstimateInput(edit.estimate);
   const next = estimate.kind === "hours" ? estimate.hours : null;
   const effect = estimate.kind === "invalid" ? <span className="project-muted">Последствие появится, когда оценка будет понятна.</span>
+    : !capacity ? <span className="project-muted">Последствие появится после заполнения данных квартала.</span>
     : describeEstimateChange(capacity, work.estimateHours, next, work.mark === "plan", hours) ?? <span className="project-muted">Оценка не меняется.</span>;
   function submit() {
     const problems = checkWork(edit);
