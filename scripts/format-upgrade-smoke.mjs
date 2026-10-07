@@ -7,6 +7,8 @@
 //   node --experimental-websocket scripts/format-upgrade-smoke.mjs legacy <port> <format-upgrade-*/result.json>
 //     0.3.0 build: refuses the upgraded copy without changing it and opens the restored backup.
 // Only synthetic smoke projects inside src-tauri/target are copied and opened; their sources are never written.
+// The new build shows the planner (stages 3–4): numbers come from «Источники и доли» and the
+// estimate is edited from the work's menu. The 0.3.0 build keeps its own tabs.
 import assert from "node:assert/strict";
 import { constants } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
@@ -16,6 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const [mode, portText, input] = process.argv.slice(2);
 assert(["upgrade", "legacy"].includes(mode) && portText && input, "Expected: upgrade|legacy <local CDP port> <path>");
+const planner = mode === "upgrade";
 const port = Number(portText);
 assert(Number.isInteger(port) && port >= 1024 && port < 65536, "Invalid CDP port");
 const workspace = await realpath(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -101,10 +104,28 @@ async function selectQ4() {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, option.value);
     select.dispatchEvent(new Event('change', { bubbles: true }));
   })()`);
-  await waitFor("document.querySelector('.project-total-available strong')?.textContent === '252 ч'", "Q4 capacity 252 ч");
-  await click("Задачи");
+  if (planner) {
+    await waitFor("document.querySelector('.project-totals-plan .project-total strong')?.textContent === '252 ч'", "Q4 capacity 252 ч");
+    await click("Источники и доли");
+  } else {
+    await waitFor("document.querySelector('.project-total-available strong')?.textContent === '252 ч'", "Q4 capacity 252 ч");
+    await click("Задачи");
+  }
 }
+/** Quota, works in the plan and the rest; the 0.3.0 build names them budget, demand and balance. */
 async function direction(name) {
+  if (planner) {
+    return evaluate(`(() => {
+      const row = Array.from(document.querySelectorAll('table.pp-sources tbody tr'))
+        .find(r => r.querySelector('input[aria-label="Название источника"]')?.value === ${JSON.stringify(name)});
+      const value = (index) => {
+        const cell = row?.cells[index]?.cloneNode(true);
+        cell?.querySelectorAll('.pp-saved').forEach((marker) => marker.remove());
+        return cell ? cell.textContent.replace(/\u00a0/g, ' ').trim() : null;
+      };
+      return { budget: value(3), demand: value(4), balance: value(5) };
+    })()`);
+  }
   return evaluate(`(() => {
     const row = Array.from(document.querySelectorAll('table.project-direction-summary tbody tr')).find(r => r.cells[0]?.textContent.trim() === ${JSON.stringify(name)});
     const value = (selector) => row?.querySelector(selector)?.textContent.trim() ?? null;
@@ -113,9 +134,29 @@ async function direction(name) {
   })()`);
 }
 async function expectNumbers(product, reserve) {
-  await waitFor(`Boolean(document.querySelector('table.project-direction-summary tbody tr'))`, "balance table");
+  await waitFor(planner ? "Boolean(document.querySelector('table.pp-sources tbody tr'))"
+    : "Boolean(document.querySelector('table.project-direction-summary tbody tr'))", "balance table");
   assert.deepEqual(await direction("Продукт"), product);
   assert.deepEqual(await direction("Встречи и резерв"), reserve);
+}
+/** The new build: «План квартала» → «Продукт» → the work's menu «Изменить…» → a new estimate. */
+async function editEstimate(work, estimate) {
+  await click("План квартала");
+  await waitFor("Array.from(document.querySelectorAll('.pp-overview .pp-name')).some(b => b.textContent === 'Продукт')", "plan overview");
+  await evaluate("Array.from(document.querySelectorAll('.pp-overview .pp-name')).find(b => b.textContent === 'Продукт').click()");
+  const row = `Array.from(document.querySelectorAll('.pp-row')).find(r => r.querySelector('.pp-wname')?.firstChild?.textContent === ${JSON.stringify(work)})`;
+  await waitFor(`Boolean(${row})`, `work ${work}`);
+  await evaluate(`${row}.querySelector('[data-menu-for]').click()`);
+  await click("Изменить…");
+  await waitFor("Boolean(document.querySelector('#edit-estimate'))", "edit form");
+  await evaluate(`(() => {
+    const input = document.querySelector('#edit-estimate');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(estimate)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await click("Сохранить изменения");
+  await waitFor("!document.querySelector('#edit-estimate')", "edit saved");
+  await click("Источники и доли");
 }
 async function closeProject() {
   await click("Закрыть проект");
@@ -165,14 +206,7 @@ try {
     // 2. An edit and the first save: the question, then Cancel writes nothing.
     await openProject(copy);
     await selectQ4();
-    await evaluate(`(() => {
-      const input = Array.from(document.querySelectorAll('[aria-label^="Название задачи "]')).find(i => i.value === 'Анализ продукта');
-      const estimate = input.closest('tr').querySelector('[aria-label^="Оценка задачи "]');
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(estimate, '28');
-      estimate.dispatchEvent(new Event('input', { bubbles: true }));
-      estimate.dispatchEvent(new Event('change', { bubbles: true }));
-      estimate.focus(); estimate.blur();
-    })()`);
+    await editEstimate("Анализ продукта", "28");
     await waitFor("document.querySelector('.project-status')?.textContent === 'Есть несохранённые изменения'", "dirty after the edit");
     await click("Сохранить квартал");
     await waitFor("document.querySelector('#format-upgrade-title')?.textContent === 'Обновить формат проекта'", "format question");

@@ -48,7 +48,7 @@ const previous = JSON.parse(originalResultBytes.toString("utf8"));
 assert.equal(previous.passed, true, "The source workflow must have passed");
 assert.equal(previous.capacityHours, "252");
 assert.equal(previous.productBudgetHours, "50.4");
-assert.equal(previous.taskCount, 2);
+assert.equal(previous.taskCount, 3);
 assert.equal(previous.productDemandHours, "30");
 assert.equal(previous.reserveDemandHours, "25");
 assert(Number.isInteger(previous.revision) && previous.revision >= 1);
@@ -134,17 +134,31 @@ async function click(text) {
   await waitFor(`Boolean(${button})`, `enabled button ${text}`);
   await evaluate(`${button}.click()`);
 }
-async function expectDirection(name, expected) {
+/** One row of «Источники и доли»: quota, works in the plan and the rest, without «сохранено» markers. */
+async function expectSource(name, expected) {
   await waitFor(`(() => {
-    const row = Array.from(document.querySelectorAll('table.project-direction-summary tbody tr'))
-      .find(row => row.cells[0]?.textContent.trim() === ${JSON.stringify(name)});
+    const row = Array.from(document.querySelectorAll('table.pp-sources tbody tr'))
+      .find(row => row.querySelector('input[aria-label="Название источника"]')?.value === ${JSON.stringify(name)});
     if (!row) return false;
-    const text = selector => row.querySelector(selector)?.textContent.trim() ?? null;
-    const actual = { budget: text('.project-direction-budget'),
-      demandLabel: text('.project-direction-demand .project-balance-label'), demand: text('.project-direction-demand .project-balance-value'),
-      balanceLabel: text('.project-direction-balance .project-balance-label'), balance: text('.project-direction-balance .project-balance-value') };
+    const value = index => { const cell = row.cells[index].cloneNode(true); cell.querySelectorAll('.pp-saved').forEach(m => m.remove());
+      return cell.textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim(); };
+    const actual = { quota: value(3), planned: value(4), rest: value(5) };
     return Object.entries(${JSON.stringify(expected)}).every(([key, value]) => actual[key] === value);
-  })()`, `copied direction ${name}`);
+  })()`, `copied source ${name}`);
+}
+/** «План квартала» → the source → its works as shown: name, estimate and group. */
+async function shownWorks(name) {
+  await click("План квартала");
+  if (await evaluate("Boolean(document.querySelector('#crumb-back'))")) await evaluate("document.querySelector('#crumb-back').click()");
+  const button = `Array.from(document.querySelectorAll('.pp-overview .pp-name')).find(b => b.textContent === ${JSON.stringify(name)})`;
+  await waitFor(`Boolean(${button})`, `source ${name}`);
+  await evaluate(`${button}.click()`);
+  await waitFor(`document.querySelector('#source-title')?.textContent === ${JSON.stringify(name)}`, `workspace of ${name}`);
+  if (await evaluate("document.querySelector('.pp-toggle')?.getAttribute('aria-expanded') === 'false'")) await evaluate("document.querySelector('.pp-toggle').click()");
+  return evaluate(`Array.from(document.querySelectorAll('.pp-row'), row => ({
+    name: row.querySelector('.pp-wname').firstChild.textContent,
+    estimate: row.querySelector('.pp-est').textContent.replace(/\\u00a0/g, ' ').trim()
+  }))`);
 }
 
 let evidenceRoot;
@@ -208,7 +222,7 @@ try {
     select.blur();
     return option.value;
   })()`);
-  await waitFor("document.querySelector('.project-total-available strong')?.textContent === '252 ч'", "explicitly selected copied Q4 capacity");
+  await waitFor("document.querySelector('.project-totals-plan .project-total strong')?.textContent === '252 ч'", "explicitly selected copied Q4 capacity");
   const selection = await evaluate(`(() => {
     const select = document.querySelector('.project-plan-select select');
     return { id: select.value, label: select.selectedOptions[0]?.textContent };
@@ -219,19 +233,19 @@ try {
   await click("Команда");
   await waitFor("document.querySelector('[aria-label=\"Ставка сотрудника 1\"]')?.value === '0,5'");
   assert.equal(await evaluate("document.querySelector('[aria-label=\"Имя сотрудника 1\"]')?.value"), "Тестовый участник");
-  await click("Задачи");
-  await waitFor("document.querySelectorAll('[aria-label^=\"Название задачи \"]').length === 2");
-  const displayedTasks = await evaluate(`Array.from(document.querySelectorAll('[aria-label^="Название задачи "]'), input => {
-    const row = input.closest('tr'); const direction = row.querySelector('select');
-    return { name: input.value, direction: direction.selectedOptions[0].textContent,
-      estimate: row.querySelector('[aria-label^="Оценка задачи "]').value };
-  })`);
-  assert.deepEqual(displayedTasks, [
-    { name: "Анализ продукта", direction: "Продукт", estimate: "30" },
-    { name: "Реализация задачи", direction: "Встречи и резерв", estimate: "25" }
+  // Works as webview-smoke left them: one in the plan and one not in this quarter in «Продукт».
+  assert.deepEqual(await shownWorks("Продукт"), [
+    { name: "Анализ продукта", estimate: "30 ч" }, { name: "Реализация задачи", estimate: "25 ч" }
   ]);
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "25 ч", balanceLabel: null, balance: "176,60 ч" });
+  assert.deepEqual(await shownWorks("Встречи и резерв"), [{ name: "Подготовка встреч", estimate: "25 ч" }]);
+  const displayedTasks = [
+    { name: "Анализ продукта", estimate: "30", direction: "Продукт", mark: "plan" },
+    { name: "Реализация задачи", estimate: "25", direction: "Продукт", mark: "out" },
+    { name: "Подготовка встреч", estimate: "25", direction: "Встречи и резерв", mark: "plan" }
+  ];
+  await click("Источники и доли");
+  await expectSource("Продукт", { quota: "50,40 ч", planned: "30 ч", rest: "20,40 ч" });
+  await expectSource("Встречи и резерв", { quota: "201,60 ч", planned: "25 ч", rest: "176,60 ч" });
 
   const rows = await evaluate(`window.__TAURI_INTERNALS__.invoke('plugin:sql|select', {
     db: window.__portableReopenSession.sessionKey,
@@ -263,8 +277,8 @@ try {
     { name: "Продукт", percent: "20" }, { name: "Встречи и резерв", percent: "80" }
   ]);
   const directions = new Map(snapshot.directions.map((direction) => [direction.id, direction.name]));
-  assert.deepEqual(snapshot.tasks.map((task) => ({ name: task.name, estimate: task.estimateHours, direction: directions.get(task.directionId) })), displayedTasks);
-  assert.equal(new Set(snapshot.tasks.map((task) => task.id)).size, 2);
+  assert.deepEqual(snapshot.tasks.map((task) => ({ name: task.name, estimate: task.estimateHours, direction: directions.get(task.directionId), mark: task.mark })), displayedTasks);
+  assert.equal(new Set(snapshot.tasks.map((task) => task.id)).size, 3);
   for (const row of rows.filter((row) => row.plan_id !== selection.id)) {
     const other = JSON.parse(row.payload_json);
     assert.deepEqual(other.tasks, []);

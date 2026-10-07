@@ -256,7 +256,10 @@ try {
     ]
   }));
   await reopenProject();
-  await waitFor("document.querySelector('.project-total-available strong')?.textContent === '252 ч'", "252 h");
+  // The planner opens on «План квартала»; the rate is edited in «Команда».
+  await waitFor("document.querySelector('.project-totals-plan .project-total strong')?.textContent === '252 ч'", "252 h");
+  await click("Команда");
+  await waitFor(`Boolean(document.querySelector('[aria-label="Ставка сотрудника 1"]'))`, "team tab");
   results.availableWhenSaved = await exportButton();
   assert.deepEqual(results.availableWhenSaved, { disabled: false, title: "Сохранить отчёт по сохранённому кварталу в файл Excel", hint: "" });
 

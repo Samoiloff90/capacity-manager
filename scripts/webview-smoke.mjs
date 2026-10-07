@@ -91,43 +91,71 @@ async function selectOption(selector, label) {
   await input(selector, value);
   return value;
 }
-async function taskRows() {
-  return evaluate(`Array.from(document.querySelectorAll('[aria-label^="Название задачи "]'), input => {
-    const row = input.closest('tr');
-    const direction = row.querySelector('[aria-label^="Направление задачи "]');
-    return { name: input.value, directionId: direction.value,
-      estimate: row.querySelector('[aria-label^="Оценка задачи "]').value };
-  })`);
+/** Works of the open source, in screen order: name, estimate as shown and the group. */
+async function workRows() {
+  return evaluate(`Array.from(document.querySelectorAll('.pp-row'), row => ({
+    name: row.querySelector('.pp-wname').firstChild.textContent,
+    estimate: row.querySelector('.pp-est').textContent.replace(/\\u00a0/g, ' ').trim(),
+    mark: row.classList.contains('cand') ? 'candidate' : 'plan'
+  }))`);
 }
-async function expectDirection(name, expected) {
+/** One row of «Источники и доли»: quota, works in the plan and the rest, without «сохранено» markers. */
+async function expectSource(name, expected) {
   const expression = `(() => {
-    const row = Array.from(document.querySelectorAll('table.project-direction-summary tbody tr'))
-      .find(row => row.cells[0]?.textContent.trim() === ${JSON.stringify(name)});
+    const row = Array.from(document.querySelectorAll('table.pp-sources tbody tr'))
+      .find(row => row.querySelector('input[aria-label="Название источника"]')?.value === ${JSON.stringify(name)});
     if (!row) return false;
-    const text = selector => row.querySelector(selector)?.textContent.trim() ?? null;
-    const actual = {
-      budget: text('.project-direction-budget'),
-      demandLabel: text('.project-direction-demand .project-balance-label'),
-      demand: text('.project-direction-demand .project-balance-value'),
-      balanceLabel: text('.project-direction-balance .project-balance-label'),
-      balance: text('.project-direction-balance .project-balance-value')
-    };
+    const value = index => { const cell = row.cells[index].cloneNode(true); cell.querySelectorAll('.pp-saved').forEach(m => m.remove());
+      return cell.textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim(); };
+    const actual = { quota: value(3), planned: value(4), rest: value(5) };
     return Object.entries(${JSON.stringify(expected)}).every(([key, value]) => actual[key] === value);
   })()`;
-  await waitFor(expression, `direction ${name}: ${JSON.stringify(expected)}`);
+  await waitFor(expression, `source ${name}: ${JSON.stringify(expected)}`);
 }
-async function clickTaskDeletion(text) {
-  const expression = `(() => {
-    const alert = Array.from(document.querySelectorAll('#project-panel [role="alert"]'))
-      .find(alert => Array.from(alert.querySelectorAll('button'))
-        .some(button => button.textContent.trim() === 'Подтвердить удаление задачи'));
-    return Array.from(alert?.querySelectorAll('button') ?? [])
-      .find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.matches(':disabled'));
-  })()`;
-  await waitFor(`Boolean(${expression})`, `task deletion control ${text}`);
-  await evaluate(`${expression}.click()`);
+async function addSource(name, share) {
+  await click("Добавить источник");
+  await waitFor("document.activeElement?.getAttribute('aria-label') === 'Название источника'", "new source name in focus");
+  const id = await evaluate("document.activeElement.id");
+  await input(`#${id}`, name);
+  await input(`#${id.replace("src-name-", "src-share-")}`, share);
+  return id.replace("src-name-", "");
+}
+async function openSource(name) {
+  await click("План квартала");
+  if (await evaluate("Boolean(document.querySelector('#crumb-back'))")) await clickSelector("#crumb-back");
+  const button = `Array.from(document.querySelectorAll('.pp-overview .pp-name')).find(b => b.textContent === ${JSON.stringify(name)})`;
+  await waitFor(`Boolean(${button})`, `source ${name} in the plan`);
+  await evaluate(`${button}.click()`);
+  await waitFor(`document.querySelector('#source-title')?.textContent === ${JSON.stringify(name)}`, `workspace of ${name}`);
+}
+/** The add form of the open source; mark "plan" adds straight to the quarter plan. */
+async function addWork(name, estimate, mark = "plan") {
+  if (!await evaluate("Boolean(document.querySelector('#add-name'))")) await clickSelector("#btn-add");
+  await input("#add-name", name);
+  await input("#add-estimate", estimate);
+  await clickSelector(`input[name="add-mark"][value="${mark}"]`);
+  await clickSelector("#add-submit");
+  await waitFor(`Array.from(document.querySelectorAll('.pp-row .pp-wname')).some(n => n.firstChild.textContent === ${JSON.stringify(name)})`, `work ${name} added`);
+}
+const workRow = (name) => `Array.from(document.querySelectorAll('.pp-row')).find(r => r.querySelector('.pp-wname').firstChild.textContent === ${JSON.stringify(name)})`;
+async function workMenu(name, item) {
+  await waitFor(`Boolean(${workRow(name)})`, `work ${name}`);
+  await evaluate(`${workRow(name)}.querySelector('[data-menu-for]').click()`);
+  const button = `Array.from(document.querySelectorAll('.pp-menu button')).find(b => b.textContent === ${JSON.stringify(item)})`;
+  await waitFor(`Boolean(${button})`, `menu item ${item}`);
+  await evaluate(`${button}.click()`);
   await sleep(40);
 }
+async function editWork(name, changes) {
+  await workMenu(name, "Изменить…");
+  await waitFor("Boolean(document.querySelector('#edit-name'))", "edit form");
+  if (changes.name !== undefined) await input("#edit-name", changes.name);
+  if (changes.estimate !== undefined) await input("#edit-estimate", changes.estimate);
+  await clickSelector("#edit-submit");
+  await waitFor("!document.querySelector('#edit-name')", "edit saved");
+}
+/** Rest of the open source as shown in its header. */
+const sourceHead = () => evaluate("Array.from(document.querySelectorAll('.pp-head .pp-num strong'), s => s.textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim())");
 async function readQuarter(planId) {
   const rows = await evaluate(`window.__TAURI_INTERNALS__.invoke('plugin:sql|select', {
     db: window.__smokeSession.sessionKey,
@@ -155,7 +183,7 @@ async function capturePage(filename) {
 }
 async function folder(value) { await evaluate(`window.__smokeFolder = ${JSON.stringify(value)}`); }
 async function expectHours(text) {
-  await waitFor(`document.querySelector('.project-total-available strong')?.textContent === ${JSON.stringify(text)}`, `capacity ${text}`);
+  await waitFor(`document.querySelector('.project-totals-plan .project-total strong')?.textContent.replace(/\\u00a0/g, ' ') === ${JSON.stringify(text)}`, `capacity ${text}`);
 }
 async function expectActiveQuarter(title) {
   await waitFor(`document.querySelector('.project-plan-select select')?.selectedOptions[0]?.textContent === ${JSON.stringify(title)}`, `active ${title}`);
@@ -234,75 +262,65 @@ try {
   assert.match(await evaluate("document.querySelector('.project-period-facts').textContent"), /^Календарь РФ 2026 · 64 рабочих дня · 6 спринтов/);
   await evaluate(`document.querySelector(${JSON.stringify(aria("Рабочий день 2026-10-03"))}).click()`);
   await expectHours("252 ч");
-  await click("Распределение");
-  await click("Добавить направление");
-  await input(aria("Название направления 1"), "Продукт");
-  await input(aria("Доля направления 1"), "20");
-  await click("Добавить направление");
-  await input(aria("Название направления 2"), "Встречи и резерв");
-  await input(aria("Доля направления 2"), "80");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "0 ч", balanceLabel: null, balance: "50,40 ч" });
+  await click("Источники и доли");
+  const productId = await addSource("Продукт", "20");
+  const reserveId = await addSource("Встречи и резерв", "80");
+  await expectSource("Продукт", { quota: "50,40 ч", planned: "—", rest: "50,40 ч" });
   const q4 = await evaluate("document.querySelector('.project-plan-select select').value");
-  await click("Задачи");
-  await click("Добавить задачу");
-  await input(aria("Название задачи 1"), "Анализ продукта");
-  const productId = await selectOption(aria("Направление задачи 1"), "Продукт");
-  await input(aria("Оценка задачи 1"), "30");
-  await click("Добавить задачу");
-  await input(aria("Название задачи 2"), "Разработка продукта");
-  await selectOption(aria("Направление задачи 2"), "Продукт");
-  await input(aria("Оценка задачи 2"), "25");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "55 ч", balanceLabel: null, balance: "−4,60 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "0 ч", balanceLabel: null, balance: "201,60 ч" });
-  await waitFor("document.querySelector('.project-total-remaining .project-chip.deficit')?.textContent === 'Дефицит в 1 направлении'", "deficit chip");
+  await openSource("Продукт");
+  await addWork("Анализ продукта", "30");
+  await addWork("Разработка продукта", "25");
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "55 ч", "перебор 4,60 ч"]);
+  await openSource("Встречи и резерв");
+  await addWork("Подготовка встреч", "25");
+  assert.deepEqual(await sourceHead(), ["201,60 ч", "25 ч", "176,60 ч"]);
+  await waitFor("Array.from(document.querySelectorAll('.project-totals-plan .project-total-note')).some(n => n.textContent.replace(/\\u00a0/g, ' ').includes('перебор 4,60 ч в 1 источнике'))", "overrun in the totals");
   await capturePage("tasks-deficit.png");
 
   // Missing is a persisted null, never an implicit zero or a complete demand.
-  await click("Добавить задачу");
-  await input(aria("Название задачи 3"), "Уточнение объёма");
-  await selectOption(aria("Направление задачи 3"), "Продукт");
-  assert.equal((await taskRows())[2].estimate, "");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: "Известная потребность", demand: "55 ч", balanceLabel: "Дефицит не менее", balance: "4,60 ч" });
+  await openSource("Продукт");
+  await addWork("Уточнение объёма", "");
+  assert.equal((await workRows()).find((row) => row.name === "Уточнение объёма").estimate, "Без оценки");
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "не менее 55 ч", "перебор не менее 4,60 ч"]);
   await saveQuarter();
   const tasksWithMissing = (await readQuarter(q4)).snapshot.tasks;
   const missingTask = tasksWithMissing.find((task) => task.name === "Уточнение объёма");
-  assert(missingTask, "The unestimated task is persisted");
+  assert(missingTask, "The unestimated work is persisted");
   assert.equal(missingTask.estimateHours, null);
-  await input(aria("Оценка задачи 3"), "0");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "55 ч", balanceLabel: null, balance: "−4,60 ч" });
+  await editWork("Уточнение объёма", { estimate: "0" });
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "55 ч", "перебор 4,60 ч"]);
   await saveQuarter();
   assert.equal((await readQuarter(q4)).snapshot.tasks.find((task) => task.id === missingTask.id)?.estimateHours, "0");
 
-  // Rename and move the same task; comma input must survive as an exact decimal.
-  await input(aria("Название задачи 2"), "Реализация задачи");
-  const reserveId = await selectOption(aria("Направление задачи 2"), "Встречи и резерв");
-  await input(aria("Оценка задачи 2"), "25,0");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "25 ч", balanceLabel: null, balance: "176,60 ч" });
-  await input(aria("Оценка задачи 1"), "30,5");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30,50 ч", balanceLabel: null, balance: "19,90 ч" });
-  await input(aria("Оценка задачи 1"), "50,4001");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "50,40 ч", balanceLabel: null, balance: "Дефицит <0,01 ч" });
-  await input(aria("Оценка задачи 1"), "30");
+  // Rename, a decimal comma and a work taken out of the quarter; IDs stay.
+  await editWork("Разработка продукта", { name: "Реализация задачи", estimate: "25,0" });
+  await workMenu("Реализация задачи", "Перенести в «Не в этом квартале»");
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "30 ч", "20,40 ч"]);
+  await editWork("Анализ продукта", { estimate: "30,5" });
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "30,50 ч", "19,90 ч"]);
+  await editWork("Анализ продукта", { estimate: "50,4001" });
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "50,40 ч", "перебор <0,01 ч"]);
+  await editWork("Анализ продукта", { estimate: "30" });
 
-  // Cancellation retains the row; confirmation removes only its stable ID.
-  await clickSelector(aria("Удалить задачу Уточнение объёма"));
-  await clickTaskDeletion("Отмена");
-  assert.equal((await taskRows()).length, 3);
-  assert.equal((await taskRows())[2].name, "Уточнение объёма");
-  await clickSelector(aria("Удалить задачу Уточнение объёма"));
-  await clickTaskDeletion("Подтвердить удаление задачи");
-  await waitFor("document.querySelectorAll('[aria-label^=\"Название задачи \"]').length === 2");
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
+  // Deletion is undone from its confirmation; deleting again removes only that work.
+  await workMenu("Уточнение объёма", "Удалить работу");
+  await waitFor(`!${workRow("Уточнение объёма")}`, "work deleted");
+  await click("Отменить");
+  await waitFor(`Boolean(${workRow("Уточнение объёма")})`, "deletion undone");
+  await workMenu("Уточнение объёма", "Удалить работу");
+  await waitFor(`!${workRow("Уточнение объёма")}`, "work deleted again");
+  assert.deepEqual(await sourceHead(), ["50,40 ч", "30 ч", "20,40 ч"]);
   await saveQuarter();
   const savedTasksBeforeClose = (await readQuarter(q4)).snapshot.tasks;
-  assert.equal(savedTasksBeforeClose.length, 2);
-  assert.equal(new Set(savedTasksBeforeClose.map((task) => task.id)).size, 2);
+  assert.equal(savedTasksBeforeClose.length, 3);
+  assert.equal(new Set(savedTasksBeforeClose.map((task) => task.id)).size, 3);
   assert(savedTasksBeforeClose.every((task) => task.id && task.id !== missingTask.id));
-  assert.deepEqual(savedTasksBeforeClose.map((task) => task.id), tasksWithMissing.slice(0, 2).map((task) => task.id), "Rename, move and deletion preserve the surviving task IDs");
-  assert.deepEqual(savedTasksBeforeClose.map(({ name, directionId, estimateHours }) => ({ name, directionId, estimateHours })), [
-    { name: "Анализ продукта", directionId: productId, estimateHours: "30" },
-    { name: "Реализация задачи", directionId: reserveId, estimateHours: "25" }
+  const survivors = tasksWithMissing.filter((task) => task.id !== missingTask.id).map((task) => task.id);
+  assert.deepEqual(savedTasksBeforeClose.map((task) => task.id), survivors, "Rename, mark changes and deletion preserve the surviving IDs");
+  assert.deepEqual(savedTasksBeforeClose.map(({ name, directionId, estimateHours, mark }) => ({ name, directionId, estimateHours, mark })), [
+    { name: "Анализ продукта", directionId: productId, estimateHours: "30", mark: "plan" },
+    { name: "Реализация задачи", directionId: productId, estimateHours: "25", mark: "out" },
+    { name: "Подготовка встреч", directionId: reserveId, estimateHours: "25", mark: "plan" }
   ]);
   await click("Изменить название команды");
   await input(".project-rename input", "Переименованная команда");
@@ -311,8 +329,8 @@ try {
   await createQuarter(1);
   await expectHours("0 ч");
   const q1 = await evaluate("document.querySelector('.project-plan-select select').value");
-  await click("Задачи");
-  assert.deepEqual(await taskRows(), []);
+  await click("План квартала");
+  await waitFor("document.querySelector('#setup-title')?.textContent === 'Квартал пока не настроен для планирования'", "empty quarter asks for sources");
   assert.deepEqual((await readQuarter(q1)).snapshot.tasks, []);
   await input(".project-plan-select select", q4);
   await expectHours("252 ч");
@@ -351,8 +369,8 @@ try {
   assert.deepEqual(copied.competencies, source.competencies);
   assert.deepEqual([copied.absences, copied.tasks], [[], []]);
   assert.equal(copied.calendarSource.version, "ru-2027-tk112-pp1187-2026-09-17-v1");
-  await click("Распределение");
-  await expectDirection("Продукт", { budget: "44,80 ч", demand: "0 ч", balance: "44,80 ч" });
+  await click("Источники и доли");
+  await expectSource("Продукт", { quota: "44,80 ч", planned: "—", rest: "44,80 ч" });
   await click("Команда");
   await input(".project-plan-select select", q4);
   await expectHours("252 ч");
@@ -364,8 +382,8 @@ try {
   await click("Выбрать папку и создать");
   await createQuarter(4);
   await expectHours("0 ч");
-  await click("Задачи");
-  assert.deepEqual(await taskRows(), []);
+  await click("План квартала");
+  await waitFor("Boolean(document.querySelector('#setup-title'))", "second project has no sources");
   const secondProjectPlanId = await evaluate("document.querySelector('.project-plan-select select').value");
   assert.deepEqual((await readQuarter(secondProjectPlanId)).snapshot.tasks, []);
   await click("Закрыть проект");
@@ -374,13 +392,12 @@ try {
   await expectHours("252 ч");
   assert.equal(await evaluate("document.querySelector('.project-title h1').textContent"), "Переименованная команда");
   assert.equal(await evaluate("document.querySelector('.project-plan-select select').value"), q4);
-  await click("Задачи");
-  assert.deepEqual(await taskRows(), [
-    { name: "Анализ продукта", directionId: productId, estimate: "30" },
-    { name: "Реализация задачи", directionId: reserveId, estimate: "25" }
-  ]);
-  await expectDirection("Продукт", { budget: "50,40 ч", demandLabel: null, demand: "30 ч", balanceLabel: null, balance: "20,40 ч" });
-  await expectDirection("Встречи и резерв", { budget: "201,60 ч", demandLabel: null, demand: "25 ч", balanceLabel: null, balance: "176,60 ч" });
+  await openSource("Продукт");
+  assert.deepEqual((await workRows()).map(({ name, estimate }) => ({ name, estimate })), [{ name: "Анализ продукта", estimate: "30 ч" }]);
+  assert.equal(await evaluate("document.querySelector('.pp-toggle')?.textContent.replace(/\\u00a0/g, ' ').trim()"), "Не в этом квартале 1 работа · бюджет не занимают");
+  await click("Источники и доли");
+  await expectSource("Продукт", { quota: "50,40 ч", planned: "30 ч", rest: "20,40 ч" });
+  await expectSource("Встречи и резерв", { quota: "201,60 ч", planned: "25 ч", rest: "176,60 ч" });
   // «Сохранить и продолжить» saves the draft before switching.
   await click("Команда");
   await input(aria("Ставка сотрудника 1"), "0,75");
@@ -436,7 +453,7 @@ try {
   assert.equal(snapshot.calendar.find((day) => day.date === "2026-10-03").isWorking, true);
   assert(!snapshot.calendarSource.baseWorkingDates.includes("2026-10-03"));
   assert.equal(snapshot.directions[0].percent, "20");
-  assert.deepEqual(snapshot.tasks, savedTasksBeforeClose, "Task IDs, names, direction references and exact estimates survive reopen");
+  assert.deepEqual(snapshot.tasks, savedTasksBeforeClose, "Work IDs, names, sources, marks and exact estimates survive reopen");
   assert.deepEqual((await readQuarter(q1)).snapshot.tasks, [], "Editing Q4 tasks leaves Q1 independent");
   // CSP must reject attempts; using .invalid prevents accidentally reaching a service.
   await evaluate("window.__smokeViolations = []; document.addEventListener('securitypolicyviolation', e => window.__smokeViolations.push({ directive: e.effectiveDirective, uri: e.blockedURI }))");
@@ -446,7 +463,7 @@ try {
   await evaluate("void window.open('https://example.invalid/popup-smoke', '_blank')");
   await sleep(100);
   assert.equal((await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).length, 1);
-  await click("Задачи");
+  await click("План квартала");
   await capturePage("workflow.png");
   await click("Закрыть проект");
   await waitFor("Boolean(document.querySelector('.project-welcome'))");
@@ -472,6 +489,7 @@ try {
     networkMode: emulateOffline ? "CDP renderer offline emulation; not an OS network block" : "normal",
     capacityHours: "252", productBudgetHours: "50.4", calendarVersion: snapshot.calendarSource.version,
     taskCount: snapshot.tasks.length, productDemandHours: "30", productRemainingHours: "20.4", reserveDemandHours: "25",
+    ui: "quarter planner (stages 3–4)",
     missingEstimateRoundTrip: true, explicitZeroRoundTrip: true, tinyDeficitDisplayed: true,
     quarterCopied: true, savedFromDialog: true, ctrlSSaved: true, reloadKeysBlocked: true, reloadControlReloaded: true,
     contextMenuLimitedToTextFields: true, sprintsShown: true }, null, 2));
