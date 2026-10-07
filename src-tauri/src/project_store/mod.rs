@@ -6,7 +6,9 @@ pub mod legacy_compat;
 mod preflight;
 mod schema;
 
-pub use schema::{APPLICATION_ID, DATABASE_NAME, LEGACY_SCHEMA_VERSION, PAYLOAD_VERSION, SCHEMA_VERSION};
+pub use schema::{
+    APPLICATION_ID, DATABASE_NAME, LEGACY_SCHEMA_VERSION, PAYLOAD_VERSION, SCHEMA_VERSION,
+};
 
 use serde::Serialize;
 use sqlx::{
@@ -425,7 +427,11 @@ impl ProjectStore {
             schema::validate(&mut connection).await
         };
         let metadata = match checked {
-            Ok(metadata) if metadata.id == before.id && metadata.schema_version == before.schema_version => metadata,
+            Ok(metadata)
+                if metadata.id == before.id && metadata.schema_version == before.schema_version =>
+            {
+                metadata
+            }
             Ok(_) => {
                 return Err(StoreError::InvalidProject(
                     "Проект заменён при открытии".into(),
@@ -499,8 +505,12 @@ impl ProjectStore {
         // retry does not try to upgrade a file that is already format 2.
         session.schema_version = SCHEMA_VERSION;
         let checked = schema::validate(&mut connection).await;
-        if !matches!(&checked, Ok(upgraded) if upgraded.id == session.project_id && upgraded.schema_version == SCHEMA_VERSION) {
-            let reason = checked.err().map(|error| format!(": {error}")).unwrap_or_default();
+        if !matches!(&checked, Ok(upgraded) if upgraded.id == session.project_id && upgraded.schema_version == SCHEMA_VERSION)
+        {
+            let reason = checked
+                .err()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default();
             return Err(StoreError::InvalidProject(format!(
                 "Формат проекта обновлён, но проверка после обновления не прошла{reason}. Резервная копия: {shown}."
             )));

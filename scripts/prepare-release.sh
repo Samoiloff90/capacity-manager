@@ -10,8 +10,12 @@ notes="$3"
 
 cp scripts/capacity-network-watch-macos.sh "$dir/"
 expected="$(printf '%s\n' \
+  "Capacity-Planner-$version-macos-arm64.dmg" \
+  "Capacity-Planner-$version-macos-arm64.dmg.sha256" \
   "Capacity-Planner-$version-macos-arm64.zip" \
   "Capacity-Planner-$version-macos-arm64.zip.sha256" \
+  "Capacity-Planner-$version-demo-projects.zip" \
+  "Capacity-Planner-$version-demo-projects.zip.sha256" \
   "Capacity-Planner-$version-windows-x64-system-webview2.zip" \
   "Capacity-Planner-$version-windows-x64-system-webview2.zip.sha256" \
   "capacity-network-watch-macos.sh" | sort)"
@@ -36,7 +40,7 @@ source_notes="docs/releases/v$version.md"
   echo
   echo "| Файл | SHA-256 |"
   echo "| --- | --- |"
-  ( cd "$dir" && for f in *.zip capacity-network-watch-macos.sh; do
+  ( cd "$dir" && for f in *.dmg *.zip capacity-network-watch-macos.sh; do
       echo "| \`$f\` | \`$(sha256sum "$f" | cut -d' ' -f1)\` |"
     done )
 } > "$notes"

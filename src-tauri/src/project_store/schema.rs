@@ -89,8 +89,8 @@ pub(super) async fn validate(connection: &mut SqliteConnection) -> StoreResult<M
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(&mut *connection)
         .await?;
-    let Some((quarter_schema, payload_versions)) = format(version)
-        .filter(|_| application_id == APPLICATION_ID)
+    let Some((quarter_schema, payload_versions)) =
+        format(version).filter(|_| application_id == APPLICATION_ID)
     else {
         return Err(StoreError::InvalidProject(
             "Неподдерживаемый формат проекта".into(),
@@ -231,8 +231,12 @@ pub(super) async fn upgrade_from_v1(
     #[cfg(test)]
     if fault == UpgradeFault::Exit {
         // Make SQLite write pages before commit, as a large real upgrade would.
-        sqlx::query("PRAGMA cache_size=1").execute(&mut *connection).await?;
-        sqlx::query("PRAGMA cache_spill=ON").execute(&mut *connection).await?;
+        sqlx::query("PRAGMA cache_size=1")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("PRAGMA cache_spill=ON")
+            .execute(&mut *connection)
+            .await?;
     }
     let mut tx = sqlx::Connection::begin(&mut *connection).await?;
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")

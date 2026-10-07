@@ -764,7 +764,9 @@ async fn format1_project(rows: &[(&str, i64, i64, &str)]) -> (preflight::Scratch
         .await
         .unwrap();
     let id = uuid::Uuid::new_v4().to_string();
-    schema::initialize_format1(&pool, &id, "Команда 0.3.0").await.unwrap();
+    schema::initialize_format1(&pool, &id, "Команда 0.3.0")
+        .await
+        .unwrap();
     for (plan, year, quarter, label) in rows {
         insert(&pool, plan, *year, *quarter, label).await;
     }
@@ -798,26 +800,34 @@ fn backups(folder: &Path) -> Vec<String> {
 type QuarterRow = (String, i64, i64, i64, String);
 
 async fn rows(pool: &SqlitePool) -> Vec<QuarterRow> {
-    sqlx::query_as("SELECT plan_id, year, quarter, revision, payload_json FROM quarter_plans ORDER BY plan_id")
-        .fetch_all(pool)
-        .await
-        .unwrap()
+    sqlx::query_as(
+        "SELECT plan_id, year, quarter, revision, payload_json FROM quarter_plans ORDER BY plan_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
 }
 
 async fn versions(pool: &SqlitePool) -> (i64, Vec<i64>, String) {
-    let user: i64 = sqlx::query_scalar("PRAGMA user_version").fetch_one(pool).await.unwrap();
-    let payloads: Vec<i64> = sqlx::query_scalar("SELECT payload_version FROM quarter_plans ORDER BY plan_id")
-        .fetch_all(pool)
-        .await
-        .unwrap();
-    let table: String = sqlx::query_scalar("SELECT sql FROM sqlite_schema WHERE name = 'quarter_plans'")
+    let user: i64 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(pool)
         .await
         .unwrap();
+    let payloads: Vec<i64> =
+        sqlx::query_scalar("SELECT payload_version FROM quarter_plans ORDER BY plan_id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    let table: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_schema WHERE name = 'quarter_plans'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
     (user, payloads, table)
 }
 
-const LEGACY_ROWS: &[(&str, i64, i64, &str)] = &[("q1", 2026, 1, "первый"), ("q2", 2026, 2, "второй")];
+const LEGACY_ROWS: &[(&str, i64, i64, &str)] =
+    &[("q1", 2026, 1, "первый"), ("q2", 2026, 2, "второй")];
 
 #[test]
 fn format1_project_opens_unchanged_and_is_upgraded_with_a_verified_backup() {
@@ -826,30 +836,49 @@ fn format1_project_opens_unchanged_and_is_upgraded_with_a_verified_backup() {
         let original = database(folder.path());
         let store = ProjectStore::new();
         let instances = DbInstances::default();
-        let session = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         assert_eq!(session.schema_version, LEGACY_SCHEMA_VERSION);
         assert_eq!(session.project_id, project_id);
         let before = rows(&registered(&instances, &session.session_key).await).await;
         store.close(&instances, &session.session_key).await.unwrap();
-        assert_eq!(database(folder.path()), original, "opening must not change the file");
+        assert_eq!(
+            database(folder.path()),
+            original,
+            "opening must not change the file"
+        );
         assert!(backups(folder.path()).is_empty());
 
-        let session = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         let pool = registered(&instances, &session.session_key).await;
         // Format 1 has no room for a quarter of format 2 until the upgrade.
-        assert!(sqlx::query("UPDATE quarter_plans SET payload_version = 2 WHERE plan_id = 'q1'")
-            .execute(&pool)
-            .await
-            .is_err());
+        assert!(
+            sqlx::query("UPDATE quarter_plans SET payload_version = 2 WHERE plan_id = 'q1'")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
         let upgrade = store.upgrade_format(&session.session_key).await.unwrap();
         assert_eq!(upgrade.schema_version, SCHEMA_VERSION);
         let shown = upgrade.backup_path.clone().unwrap();
-        assert!(!shown.starts_with(r"\\?\"), "the path is shown as in Explorer: {shown}");
+        assert!(
+            !shown.starts_with(r"\\?\"),
+            "the path is shown as in Explorer: {shown}"
+        );
         let names = backups(folder.path());
         assert_eq!(names.len(), 1);
         assert!(partials(folder.path()).is_empty());
         assert!(shown.ends_with(&names[0]));
-        assert_eq!(fs::read(folder.path().join(&names[0])).unwrap(), original, "the backup is the original file");
+        assert_eq!(
+            fs::read(folder.path().join(&names[0])).unwrap(),
+            original,
+            "the backup is the original file"
+        );
         let (user, payloads, table) = versions(&pool).await;
         assert_eq!((user, payloads), (SCHEMA_VERSION, vec![1, 1]));
         assert!(table.contains("payload_version IN (1, 2)"));
@@ -865,13 +894,30 @@ fn format1_project_opens_unchanged_and_is_upgraded_with_a_verified_backup() {
         store.close(&instances, &session.session_key).await.unwrap();
 
         let header = &database(folder.path())[..100];
-        assert_eq!(u32::from_be_bytes(header[60..64].try_into().unwrap()), 2, "0.3.0 refuses any version but 1");
-        assert_eq!(u32::from_be_bytes(header[68..72].try_into().unwrap()) as i64, APPLICATION_ID);
-        let reopened = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        assert_eq!(
+            u32::from_be_bytes(header[60..64].try_into().unwrap()),
+            2,
+            "0.3.0 refuses any version but 1"
+        );
+        assert_eq!(
+            u32::from_be_bytes(header[68..72].try_into().unwrap()) as i64,
+            APPLICATION_ID
+        );
+        let reopened = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         assert_eq!(reopened.schema_version, SCHEMA_VERSION);
         let pool = registered(&instances, &reopened.session_key).await;
-        assert_eq!(versions(&pool).await.1, vec![2, 1], "quarters of both formats live in one file");
-        store.close(&instances, &reopened.session_key).await.unwrap();
+        assert_eq!(
+            versions(&pool).await.1,
+            vec![2, 1],
+            "quarters of both formats live in one file"
+        );
+        store
+            .close(&instances, &reopened.session_key)
+            .await
+            .unwrap();
     });
 }
 
@@ -882,21 +928,33 @@ fn failed_backup_leaves_the_project_untouched_and_a_retry_succeeds() {
         let original = database(folder.path());
         let store = ProjectStore::new();
         let instances = DbInstances::default();
-        let session = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         let error = store
             .upgrade_format_inner(&session.session_key, schema::UpgradeFault::Backup)
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.starts_with("Не удалось создать резервную копию проекта"), "{error}");
+        assert!(
+            error.starts_with("Не удалось создать резервную копию проекта"),
+            "{error}"
+        );
         assert!(error.ends_with("Исходный файл не изменён."), "{error}");
         assert!(backups(folder.path()).is_empty(), "no backup appears");
-        assert!(partials(folder.path()).is_empty(), "no partial copy is left");
+        assert!(
+            partials(folder.path()).is_empty(),
+            "no partial copy is left"
+        );
         let pool = registered(&instances, &session.session_key).await;
         assert_eq!(versions(&pool).await.0, LEGACY_SCHEMA_VERSION);
         store.upgrade_format(&session.session_key).await.unwrap();
         store.close(&instances, &session.session_key).await.unwrap();
-        assert_eq!(fs::read(folder.path().join(&backups(folder.path())[0])).unwrap(), original);
+        assert_eq!(
+            fs::read(folder.path().join(&backups(folder.path())[0])).unwrap(),
+            original
+        );
     });
 }
 
@@ -907,7 +965,10 @@ fn failed_upgrade_rolls_back_and_keeps_the_checked_backup() {
         let original = database(folder.path());
         let store = ProjectStore::new();
         let instances = DbInstances::default();
-        let session = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         let pool = registered(&instances, &session.session_key).await;
         let before = rows(&pool).await;
         let error = store
@@ -915,23 +976,44 @@ fn failed_upgrade_rolls_back_and_keeps_the_checked_backup() {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.starts_with("Не удалось обновить формат проекта"), "{error}");
-        assert!(error.contains("Исходный файл не изменён, резервная копия: "), "{error}");
+        assert!(
+            error.starts_with("Не удалось обновить формат проекта"),
+            "{error}"
+        );
+        assert!(
+            error.contains("Исходный файл не изменён, резервная копия: "),
+            "{error}"
+        );
         let (user, payloads, table) = versions(&pool).await;
         assert_eq!((user, payloads), (LEGACY_SCHEMA_VERSION, vec![1, 1]));
         assert!(table.contains("payload_version = 1"));
         assert_eq!(rows(&pool).await, before);
-        let leftovers: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_schema WHERE name = 'quarter_plans_format1'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let leftovers: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'quarter_plans_format1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(leftovers, 0);
         store.close(&instances, &session.session_key).await.unwrap();
-        assert_eq!(database(folder.path()), original, "the rolled back file is the original");
-        assert_eq!(fs::read(folder.path().join(&backups(folder.path())[0])).unwrap(), original);
-        let reopened = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        assert_eq!(
+            database(folder.path()),
+            original,
+            "the rolled back file is the original"
+        );
+        assert_eq!(
+            fs::read(folder.path().join(&backups(folder.path())[0])).unwrap(),
+            original
+        );
+        let reopened = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         assert_eq!(reopened.schema_version, LEGACY_SCHEMA_VERSION);
-        store.close(&instances, &reopened.session_key).await.unwrap();
+        store
+            .close(&instances, &reopened.session_key)
+            .await
+            .unwrap();
     });
 }
 
@@ -939,16 +1021,26 @@ fn failed_upgrade_rolls_back_and_keeps_the_checked_backup() {
 fn upgrade_interrupted_by_a_process_crash_reopens_as_the_format1_project() {
     run(async {
         let big = "x".repeat(200_000);
-        let (folder, project_id) = format1_project(&[("q1", 2026, 1, "первый"), ("q2", 2026, 2, &big)]).await;
+        let (folder, project_id) =
+            format1_project(&[("q1", 2026, 1, "первый"), ("q2", 2026, 2, &big)]).await;
         let original = database(folder.path());
         let status = child(folder.path(), "upgrade-crash").wait().unwrap();
         assert_eq!(status.code(), Some(24));
         let journal = preflight::sidecar(&folder.path().join(DATABASE_NAME), "-journal");
-        assert!(fs::metadata(&journal).unwrap().len() > 512, "must really leave a rollback journal");
-        assert_eq!(fs::read(folder.path().join(&backups(folder.path())[0])).unwrap(), original);
+        assert!(
+            fs::metadata(&journal).unwrap().len() > 512,
+            "must really leave a rollback journal"
+        );
+        assert_eq!(
+            fs::read(folder.path().join(&backups(folder.path())[0])).unwrap(),
+            original
+        );
         let store = ProjectStore::new();
         let instances = DbInstances::default();
-        let recovered = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        let recovered = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         assert_eq!(recovered.schema_version, LEGACY_SCHEMA_VERSION);
         assert_eq!(recovered.project_id, project_id);
         let pool = registered(&instances, &recovered.session_key).await;
@@ -958,7 +1050,10 @@ fn upgrade_interrupted_by_a_process_crash_reopens_as_the_format1_project() {
         assert!(restored[1].4.contains(&big));
         // The recovered project can be upgraded again.
         store.upgrade_format(&recovered.session_key).await.unwrap();
-        store.close(&instances, &recovered.session_key).await.unwrap();
+        store
+            .close(&instances, &recovered.session_key)
+            .await
+            .unwrap();
     });
 }
 
@@ -969,7 +1064,10 @@ fn restoring_the_backup_brings_back_the_project_as_saved_by_0_3_0() {
         let original = database(folder.path());
         let store = ProjectStore::new();
         let instances = DbInstances::default();
-        let session = store.open(&instances, folder.path().to_owned()).await.unwrap();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
         let before = rows(&registered(&instances, &session.session_key).await).await;
         store.upgrade_format(&session.session_key).await.unwrap();
         store.close(&instances, &session.session_key).await.unwrap();
@@ -981,11 +1079,20 @@ fn restoring_the_backup_brings_back_the_project_as_saved_by_0_3_0() {
         )
         .unwrap();
         assert_eq!(database(restored.path()), original);
-        let reopened = store.open(&instances, restored.path().to_owned()).await.unwrap();
+        let reopened = store
+            .open(&instances, restored.path().to_owned())
+            .await
+            .unwrap();
         assert_eq!(reopened.schema_version, LEGACY_SCHEMA_VERSION);
         assert_eq!(reopened.project_id, project_id);
-        assert_eq!(rows(&registered(&instances, &reopened.session_key).await).await, before);
-        store.close(&instances, &reopened.session_key).await.unwrap();
+        assert_eq!(
+            rows(&registered(&instances, &reopened.session_key).await).await,
+            before
+        );
+        store
+            .close(&instances, &reopened.session_key)
+            .await
+            .unwrap();
     });
 }
 
@@ -995,19 +1102,117 @@ fn backup_names_use_the_utc_date_and_never_reuse_a_file() {
     assert_eq!(backup::civil_from_days(-1), (1969, 12, 31));
     assert_eq!(backup::civil_from_days(11_016), (2000, 2, 29));
     assert_eq!(backup::civil_from_days(20_732), (2026, 10, 6));
-    assert_eq!(backup::file_name((2026, 10, 6), 0), "capacity-backup-format1-2026-10-06.sqlite");
-    assert_eq!(backup::file_name((2026, 10, 6), 1), "capacity-backup-format1-2026-10-06-2.sqlite");
-    assert_eq!(backup::shown(Path::new(r"\\?\D:\Команды\А\x.sqlite")), r"D:\Команды\А\x.sqlite");
-    assert_eq!(backup::shown(Path::new(r"\\?\UNC\server\share\x.sqlite")), r"\\server\share\x.sqlite");
-    assert_eq!(backup::shown(Path::new("/Users/po/Команда/x.sqlite")), "/Users/po/Команда/x.sqlite");
+    assert_eq!(
+        backup::file_name((2026, 10, 6), 0),
+        "capacity-backup-format1-2026-10-06.sqlite"
+    );
+    assert_eq!(
+        backup::file_name((2026, 10, 6), 1),
+        "capacity-backup-format1-2026-10-06-2.sqlite"
+    );
+    assert_eq!(
+        backup::shown(Path::new(r"\\?\D:\Команды\А\x.sqlite")),
+        r"D:\Команды\А\x.sqlite"
+    );
+    assert_eq!(
+        backup::shown(Path::new(r"\\?\UNC\server\share\x.sqlite")),
+        r"\\server\share\x.sqlite"
+    );
+    assert_eq!(
+        backup::shown(Path::new("/Users/po/Команда/x.sqlite")),
+        "/Users/po/Команда/x.sqlite"
+    );
     let folder = fixture();
     let source = folder.path().join(DATABASE_NAME);
     fs::write(&source, b"SQLite format 3\0 test bytes").unwrap();
     let first = backup::create(&source, false).unwrap();
     let second = backup::create(&source, false).unwrap();
     assert_ne!(first, second);
-    assert!(second.to_string_lossy().ends_with("-2.sqlite"), "{}", second.display());
+    assert!(
+        second.to_string_lossy().ends_with("-2.sqlite"),
+        "{}",
+        second.display()
+    );
     assert!(partials(folder.path()).is_empty());
     assert_eq!(fs::read(&first).unwrap(), fs::read(&source).unwrap());
     assert_eq!(fs::read(&second).unwrap(), fs::read(&source).unwrap());
+}
+
+/// Fictional demo projects for a preview build, written by the store exactly as the app
+/// writes them. Payloads come from tests/demo-projects.test.ts. CI only:
+/// `CAPACITY_DEMO_OUT=<empty dir> cargo test --lib write_demo_projects -- --ignored`.
+#[test]
+#[ignore = "writes the demo projects of a preview build into CAPACITY_DEMO_OUT"]
+fn write_demo_projects() {
+    const CURRENT: &str = include_str!("../../../tests/fixtures/demo/current-2027-q1.json");
+    const LEGACY: &str = include_str!("../../../tests/fixtures/demo/legacy-2026-q4.format1.json");
+    let out = PathBuf::from(std::env::var("CAPACITY_DEMO_OUT").expect("CAPACITY_DEMO_OUT"));
+    let minified = |text: &str| {
+        serde_json::from_str::<serde_json::Value>(text)
+            .unwrap()
+            .to_string()
+    };
+    run(async {
+        let store = ProjectStore::new();
+        let instances = DbInstances::default();
+
+        let current = out.join("Alpha-new-format");
+        fs::create_dir_all(&current).unwrap();
+        let session = store
+            .create(
+                &instances,
+                current.clone(),
+                "Учебная команда «Альфа»".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.schema_version, SCHEMA_VERSION);
+        let pool = registered(&instances, &session.session_key).await;
+        sqlx::query("INSERT INTO quarter_plans (plan_id, year, quarter, revision, payload_version, payload_json) VALUES (?, 2027, 1, 1, ?, ?)")
+            .bind("demo-alpha-2027-q1").bind(schema::PAYLOAD_VERSION).bind(minified(CURRENT))
+            .execute(&pool).await.unwrap();
+        drop(pool);
+        store.close(&instances, &session.session_key).await.unwrap();
+
+        // As 0.1.0–0.3.0 created it: schema 1, payload 1.
+        let legacy = out.join("Beta-format-0.3.0");
+        fs::create_dir_all(&legacy).unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                connection_options(&legacy.join(DATABASE_NAME), false).create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        schema::initialize_format1(
+            &pool,
+            "8c0f5d2e-6a71-4c39-9d0e-3b1f2a4c5d6e",
+            "Учебная команда «Бета» (формат 0.3.0)",
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO quarter_plans (plan_id, year, quarter, revision, payload_version, payload_json) VALUES (?, 2026, 4, 1, 1, ?)")
+            .bind("demo-beta-2026-q4").bind(minified(LEGACY))
+            .execute(&pool).await.unwrap();
+        pool.close().await;
+
+        // Both open as projects of their format and are left closed, without a lock file.
+        for (folder, version) in [(&current, SCHEMA_VERSION), (&legacy, LEGACY_SCHEMA_VERSION)] {
+            let session = store.open(&instances, folder.to_path_buf()).await.unwrap();
+            assert_eq!(session.schema_version, version);
+            store.close(&instances, &session.session_key).await.unwrap();
+            let _ = fs::remove_file(folder.join(".capacity.lock"));
+            let mut names: Vec<String> = fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            assert_eq!(
+                names,
+                vec![DATABASE_NAME.to_string()],
+                "{}",
+                folder.display()
+            );
+        }
+    });
 }

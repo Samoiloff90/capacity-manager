@@ -1,15 +1,17 @@
-# Builds the macOS arm64 .app and the Windows x64 portable ZIP. No secrets, no signing
-# identity: the .app gets an ad-hoc signature (tauri.conf.json, bundle.macOS).
+# Builds the macOS arm64 .app (as a disk image and a zip) and the Windows x64 portable ZIP.
+# No secrets, no signing identity: the .app gets an ad-hoc signature (tauri.conf.json,
+# bundle.macOS); it is neither signed with a Developer ID nor notarized.
 # Order: build and upload first, then tests, so a failing test still leaves an artifact
 # and one run reports every failure; the job stays red either way.
-# A pushed tag vX.Y.Z (only on the PO's command, DEC-025) also publishes a GitHub release
-# with both builds; scripts/check-release.mjs checks the tag before anything is built.
+# A pushed tag vX.Y.Z or vX.Y.Z-suffix (only on the PO's command, DEC-025) also publishes a
+# GitHub release with both builds and the fictional demo projects; scripts/check-release.mjs
+# checks the tag before anything is built. The working branch quarter-planner builds too.
 name: Build
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, quarter-planner]
     tags: ["v*"]
     # Path filters do not apply to tag pushes: a release tag always builds.
     paths-ignore:
@@ -43,8 +45,6 @@ jobs:
     name: macOS arm64 (.app)
     runs-on: macos-26
     timeout-minutes: 60
-    env:
-      APP_ID: local.capacity-planner
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,6 +60,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
+      # A preview build has its own name and bundle id, so it never replaces the stable app.
+      - name: App identity
+        run: |
+          set -euo pipefail
+          echo "APP_ID=$(node -p 'require("./src-tauri/tauri.conf.json").identifier')" >> "$GITHUB_ENV"
+          echo "APP_BUNDLE=$(node -p 'require("./src-tauri/tauri.conf.json").productName').app" >> "$GITHUB_ENV"
 
       - name: Rust
         id: rust
@@ -99,7 +106,7 @@ jobs:
           }
           exe="$(get CFBundleExecutable)"
           version="$(get CFBundleShortVersionString)"
-          must_equal bundle "$(basename "$app")" "Capacity Planner.app"
+          must_equal bundle "$(basename "$app")" "$APP_BUNDLE"
           must_equal CFBundleIdentifier "$(get CFBundleIdentifier)" "$APP_ID"
           must_equal CFBundleShortVersionString "$version" "$(node -p 'require("./src-tauri/tauri.conf.json").version')"
           must_equal CFBundleDevelopmentRegion "$(get CFBundleDevelopmentRegion)" ru
@@ -108,6 +115,9 @@ jobs:
           icon="$(get CFBundleIconFile)"
           case "$icon" in *.icns) ;; *) icon="$icon.icns" ;; esac
           test -s "$app/Contents/Resources/$icon" || { echo "::error title=Inspect::missing Contents/Resources/$icon"; exit 1; }
+          minimum="$(get LSMinimumSystemVersion 2>/dev/null || echo "not set")"
+          echo "LSMinimumSystemVersion = $minimum"
+          echo "MIN_MACOS=$minimum" >> "$GITHUB_ENV"
           codesign --verify --deep --strict --verbose=2 "$app"
           signature="$(codesign -dv "$app" 2>&1)"
           echo "$signature"
@@ -129,13 +139,70 @@ jobs:
           check="$RUNNER_TEMP/unzipped"
           rm -rf "$check" && mkdir -p "$check"
           ditto -x -k "$out/$name.zip" "$check"
-          codesign --verify --deep --strict --verbose=2 "$check/Capacity Planner.app"
+          codesign --verify --deep --strict --verbose=2 "$check/$APP_BUNDLE"
           echo "MAC_ZIP=$out/$name.zip" >> "$GITHUB_ENV"
-          echo "SMOKE_APP=$check/Capacity Planner.app" >> "$GITHUB_ENV"
+          echo "SMOKE_APP=$check/$APP_BUNDLE" >> "$GITHUB_ENV"
           {
             echo "### macOS: \`$name.zip\`"
             echo "SHA-256: \`$(cut -d' ' -f1 "$out/$name.zip.sha256")\`"
+            echo "Bundle: \`$APP_BUNDLE\` ($APP_ID), minimum macOS $MIN_MACOS, ad-hoc signature, not notarized"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The installer the PO downloads: the .app next to a link to /Applications and a short
+      # note. hdiutil only, no Finder scripting; the copy inside must keep its signature.
+      - name: Disk image (.dmg) and its round trip
+        id: dmg
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          name="Capacity-Planner-${APP_VERSION}-macos-arm64"
+          out="$RUNNER_TEMP/out"
+          stage="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$stage" && mkdir -p "$stage"
+          ditto "$APP_PATH" "$stage/$APP_BUNDLE"
+          ln -s /Applications "$stage/Applications"
+          cp packaging/macos/README-DMG.txt "$stage/Как установить.txt"
+          for attempt in 1 2 3; do
+            if hdiutil create -volname "Capacity Planner $APP_VERSION" -srcfolder "$stage" -fs HFS+ -format UDZO -ov "$out/$name.dmg"; then break; fi
+            if [ "$attempt" -eq 3 ]; then echo "::error title=dmg::hdiutil create failed 3 times"; exit 1; fi
+            sleep 10
+          done
+          hdiutil verify "$out/$name.dmg"
+          mount="$RUNNER_TEMP/dmg-mount"
+          mkdir -p "$mount"
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" "$out/$name.dmg"
+          codesign --verify --deep --strict --verbose=2 "$mount/$APP_BUNDLE"
+          test -L "$mount/Applications"
+          test -s "$mount/Как установить.txt"
+          diff -r "$APP_PATH" "$mount/$APP_BUNDLE"
+          ls -la "$mount"
+          hdiutil detach "$mount"
+          ( cd "$out" && shasum -a 256 "$name.dmg" > "$name.dmg.sha256" && cat "$name.dmg.sha256" )
+          echo "MAC_DMG=$out/$name.dmg" >> "$GITHUB_ENV"
+          {
+            echo "### macOS: \`$name.dmg\`"
+            echo "SHA-256: \`$(cut -d' ' -f1 "$out/$name.dmg.sha256")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload macOS disk image
+        if: ${{ !cancelled() && steps.dmg.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.MAC_DMG }}
+          archive: false
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload macOS disk image checksum
+        if: ${{ !cancelled() && steps.dmg.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.MAC_DMG }}.sha256
+          archive: false
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload macOS zip
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
@@ -257,6 +324,46 @@ jobs:
       - name: Rust tests (APFS, flock, /private/var)
         if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
         run: bash scripts/ci-run.sh cargo-test cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      # Fictional projects for the first check of a build: one in the current format and one
+      # as 0.3.0 saved it, written by the project store itself (write_demo_projects).
+      - name: Demo projects
+        id: demo
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          name="Capacity-Planner-${version}-demo-projects"
+          base="$RUNNER_TEMP/demo"
+          out="$RUNNER_TEMP/demo-out"
+          rm -rf "$base" "$out" && mkdir -p "$base/$name" "$out"
+          CAPACITY_DEMO_OUT="$base/$name" bash scripts/ci-run.sh demo-projects \
+            cargo test --manifest-path src-tauri/Cargo.toml --locked --lib write_demo_projects -- --ignored --exact project_store::tests::write_demo_projects
+          cp packaging/demo/README.txt "$base/$name/README.txt"
+          ( cd "$base" && ditto -c -k --keepParent "$name" "$out/$name.zip" )
+          ( cd "$out" && shasum -a 256 "$name.zip" > "$name.zip.sha256" && cat "$name.zip.sha256" )
+          unzip -l "$out/$name.zip"
+          echo "DEMO_ZIP=$out/$name.zip" >> "$GITHUB_ENV"
+
+      - name: Upload demo projects
+        if: ${{ !cancelled() && steps.demo.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.DEMO_ZIP }}
+          archive: false
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload demo projects checksum
+        if: ${{ !cancelled() && steps.demo.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.DEMO_ZIP }}.sha256
+          archive: false
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
 
   windows:
     name: Windows x64 (portable ZIP)
@@ -437,8 +544,8 @@ jobs:
       - name: Verify files and notes
         run: bash scripts/prepare-release.sh "${GITHUB_REF_NAME#v}" "$RUNNER_TEMP/release" "$RUNNER_TEMP/notes.md"
 
-      # Fails closed: anything but "pre" or "full" stops the release, so a 0.x version can
-      # never be published as the latest release by mistake.
+      # Fails closed: anything but "pre" or "full" stops the release, so a 0.x or suffixed
+      # version can never be published as the latest release by mistake.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -446,7 +553,7 @@ jobs:
           set -euo pipefail
           kind="$(node scripts/check-release.mjs --kind "$GITHUB_REF_NAME")"
           case "$kind" in
-            pre) prerelease="--prerelease" ;;
+            pre) prerelease="--prerelease --latest=false" ;;
             full) prerelease="" ;;
             *) echo "::error title=Release::cannot classify $GITHUB_REF_NAME"; exit 1 ;;
           esac

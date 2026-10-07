@@ -1,0 +1,516 @@
+{
+  "year": 2026,
+  "quarter": 4,
+  "calendar": [
+    {
+      "date": "2026-10-01",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-02",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-03",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-04",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-05",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-06",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-07",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-08",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-09",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-10",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-11",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-12",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-13",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-14",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-15",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-16",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-17",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-18",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-19",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-20",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-21",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-22",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-23",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-24",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-25",
+      "isWorking": false
+    },
+    {
+      "date": "2026-10-26",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-27",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-28",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-29",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-30",
+      "isWorking": true
+    },
+    {
+      "date": "2026-10-31",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-01",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-02",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-03",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-04",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-05",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-06",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-07",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-08",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-09",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-10",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-11",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-12",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-13",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-14",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-15",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-16",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-17",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-18",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-19",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-20",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-21",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-22",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-23",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-24",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-25",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-26",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-27",
+      "isWorking": true
+    },
+    {
+      "date": "2026-11-28",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-29",
+      "isWorking": false
+    },
+    {
+      "date": "2026-11-30",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-01",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-02",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-03",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-04",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-05",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-06",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-07",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-08",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-09",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-10",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-11",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-12",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-13",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-14",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-15",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-16",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-17",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-18",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-19",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-20",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-21",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-22",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-23",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-24",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-25",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-26",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-27",
+      "isWorking": false
+    },
+    {
+      "date": "2026-12-28",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-29",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-30",
+      "isWorking": true
+    },
+    {
+      "date": "2026-12-31",
+      "isWorking": false
+    }
+  ],
+  "calendarSource": {
+    "kind": "ru-official",
+    "version": "ru-2026-tk112-pp1466-2025-09-24-v1",
+    "baseWorkingDates": [
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-19",
+      "2026-10-20",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-26",
+      "2026-10-27",
+      "2026-10-28",
+      "2026-10-29",
+      "2026-10-30",
+      "2026-11-02",
+      "2026-11-03",
+      "2026-11-05",
+      "2026-11-06",
+      "2026-11-09",
+      "2026-11-10",
+      "2026-11-11",
+      "2026-11-12",
+      "2026-11-13",
+      "2026-11-16",
+      "2026-11-17",
+      "2026-11-18",
+      "2026-11-19",
+      "2026-11-20",
+      "2026-11-23",
+      "2026-11-24",
+      "2026-11-25",
+      "2026-11-26",
+      "2026-11-27",
+      "2026-11-30",
+      "2026-12-01",
+      "2026-12-02",
+      "2026-12-03",
+      "2026-12-04",
+      "2026-12-07",
+      "2026-12-08",
+      "2026-12-09",
+      "2026-12-10",
+      "2026-12-11",
+      "2026-12-14",
+      "2026-12-15",
+      "2026-12-16",
+      "2026-12-17",
+      "2026-12-18",
+      "2026-12-21",
+      "2026-12-22",
+      "2026-12-23",
+      "2026-12-24",
+      "2026-12-25",
+      "2026-12-28",
+      "2026-12-29",
+      "2026-12-30"
+    ],
+    "sourceUrls": [
+      "https://mintrud.gov.ru/labour/relationship/351",
+      "https://government.ru/docs/all/161028/"
+    ]
+  },
+  "competencies": [
+    {
+      "id": "comp-analysis",
+      "name": "Аналитика"
+    },
+    {
+      "id": "comp-dev",
+      "name": "Разработка"
+    }
+  ],
+  "members": [
+    {
+      "id": "m-irina",
+      "name": "Ирина Кузнецова",
+      "competencyId": "comp-analysis",
+      "fte": "1"
+    },
+    {
+      "id": "m-kirill",
+      "name": "Кирилл Лебедев",
+      "competencyId": "comp-dev",
+      "fte": "1"
+    },
+    {
+      "id": "m-lev",
+      "name": "Лев Новиков",
+      "competencyId": "comp-dev",
+      "fte": "0.75"
+    }
+  ],
+  "absences": [],
+  "directions": [
+    {
+      "id": "dir-meetings",
+      "name": "Встречи и резерв",
+      "percent": "20"
+    },
+    {
+      "id": "dir-product",
+      "name": "Продукт",
+      "percent": "50"
+    },
+    {
+      "id": "dir-support",
+      "name": "Поддержка",
+      "percent": "30"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t-history",
+      "name": "Личный кабинет: история заказов",
+      "directionId": "dir-product",
+      "estimateHours": "160"
+    },
+    {
+      "id": "t-mail",
+      "name": "Интеграция с почтой",
+      "directionId": "dir-product",
+      "estimateHours": null
+    },
+    {
+      "id": "t-tickets",
+      "name": "Разбор обращений",
+      "directionId": "dir-support",
+      "estimateHours": "120"
+    }
+  ]
+}

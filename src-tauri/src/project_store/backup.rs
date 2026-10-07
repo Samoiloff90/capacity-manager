@@ -27,7 +27,11 @@ pub(super) fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 /// `capacity-backup-format1-2026-10-06.sqlite`, then `…-2.sqlite` and so on (UTC date).
 pub(super) fn file_name((year, month, day): (i64, u32, u32), attempt: u32) -> String {
-    let suffix = if attempt == 0 { String::new() } else { format!("-{}", attempt + 1) };
+    let suffix = if attempt == 0 {
+        String::new()
+    } else {
+        format!("-{}", attempt + 1)
+    };
     format!("capacity-backup-format1-{year:04}-{month:02}-{day:02}{suffix}.sqlite")
 }
 
@@ -91,7 +95,10 @@ pub(super) fn create(database: &Path, fail: bool) -> StoreResult<PathBuf> {
         .ok_or_else(|| StoreError::InvalidProject("Не найдена папка проекта".into()))?;
     let partial = directory.join(format!(".capacity-backup-{}.partial", uuid::Uuid::new_v4()));
     let written = (|| -> StoreResult<()> {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&partial)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)?;
         if fail {
             return Err(StoreError::InvalidProject(
                 "Имитированная ошибка записи копии".into(),
