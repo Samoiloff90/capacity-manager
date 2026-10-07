@@ -1,3 +1,7 @@
+/* Header: the preview chip sits under the team name, the help page link in the period bar. */
+.project-title .project-chip.preview { margin: 2px 0 1px; }
+.project-app .project-help-link { font-size: 14px; }
+
 /* Quarter planner (QUARTER_PLANNING_UX.md): the agreed prototype in the 0.3.0 style tokens:
    blue #1d5fd1, borders #dfe6f0, overrun #9b1c1c, missing estimates #805815. */
 .project-totals.project-totals-plan { gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 12px 18px; }
@@ -129,7 +133,8 @@
 .pp-sources td { vertical-align: top; }
 .pp-sources .pp-name-cell { min-width: 220px; }
 .pp-sources .pp-name-cell > input { width: 100%; }
-.project-app .pp-sources input.pp-share, .project-app .pp-people input.pp-share, .project-app .pp-inline-label input.pp-share { min-width: 0; text-align: right; width: 84px; }
+.project-app .pp-sources input.pp-share, .project-app .pp-inline-label input.pp-share { min-width: 0; text-align: right; width: 84px; }
+.project-app .pp-people input.pp-share { min-width: 0; text-align: right; width: 116px; }
 .project-app .pp-sources select { min-width: 0; width: 170px; }
 .pp-sources .pp-cellnum { display: block; font-size: 14px; font-variant-numeric: tabular-nums; line-height: 36px; }
 .pp-sources .pp-cellnum.text { line-height: 1.4; padding-top: 8px; }

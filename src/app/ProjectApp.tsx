@@ -3,10 +3,11 @@ import appIcon from "../../src-tauri/icons/128x128.png";
 import { useProjectWorkspace } from "./project-workspace";
 import { PROJECT_NAME_FORM, quarterTitle } from "./project-workspace-controller";
 import { DiscardDialog, FormatUpgradeDialog, NewQuarterDialog } from "./ProjectDialogs";
+import { HelpDialog, type HelpTab } from "./HelpDialog";
+import { PlanTab } from "./PlanTab";
 import { DeleteButton, DIALOG_ROOT_ID, InfoHint, PencilIcon, restoreFocus } from "./project-ui";
 import { hours, isMac, saveShortcut, Sign } from "./plan-ui";
 import { SourcesTab } from "./SourcesTab";
-import { TasksEditor } from "./TasksEditor";
 import { describeValidationIssue } from "./validation-text";
 import { getQuarterDates, type Quarter } from "../domain/capacity/calendar-quarter";
 import { formatDeficitHours, normalizeUserDecimal } from "../domain/capacity/input-format";
@@ -19,7 +20,7 @@ import type { QuarterCapacityResult, QuarterSnapshot, QuarterValidationIssue } f
 import "../styles/project-app.css";
 import "../styles/quarter-planner.css";
 
-type Tab = "team" | "calendar" | "absences" | "sources" | "tasks";
+type Tab = HelpTab;
 type UpdateDraft = (update: (current: QuarterSnapshot) => QuarterSnapshot) => void;
 type EditorProps = { snapshot: QuarterSnapshot; update: UpdateDraft; result: QuarterCapacityResult | null };
 const tabs: ReadonlyArray<{ id: Tab; label: string }> = [
@@ -27,11 +28,13 @@ const tabs: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "calendar", label: "Календарь" },
   { id: "absences", label: "Отсутствия" },
   { id: "sources", label: "Источники и доли" },
-  { id: "tasks", label: "Задачи" }
+  { id: "plan", label: "План квартала" }
 ];
 const nameGuard = PROJECT_NAME_FORM;
 const newId = () => crypto.randomUUID();
 const numberText = (value: string) => value.replace(".", ",");
+/** A preview build says so in the window (0.4.0-alpha.1); a release shows nothing extra. */
+const PREVIEW_VERSION = __APP_VERSION__.includes("-") ? __APP_VERSION__ : null;
 
 /** "Сохраните квартал" → "Отчёт: сохраните квартал"; a hint that already names the report stays as is. */
 function reportHint(hint: string): string {
@@ -68,7 +71,9 @@ export default function ProjectApp() {
   const [choosingFolder, setChoosingFolder] = useState(false);
   const [creatingQuarter, setCreatingQuarter] = useState(false);
   const [uiError, setUiError] = useState("");
-  const [tab, setTab] = useState<Tab>("team");
+  const [tab, setTab] = useState<Tab>("plan");
+  const [planSource, setPlanSource] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [tabDialog, setTabDialog] = useState(false);
   const [saveHint, setSaveHint] = useState(0);
   const page = useRef<HTMLDivElement>(null);
@@ -86,6 +91,7 @@ export default function ProjectApp() {
     actions.setPendingFormDirty(nameGuard, false);
     setUiError("");
   }, [projectId, projectName, state.activePlanId]);
+  useEffect(() => { setPlanSource(null); }, [projectId, state.activePlanId]);
 
   // The saved version of the active quarter: «сохранено: 10%» markers and quota changes.
   const savedPlan = state.plans.find((plan) => plan.planId === state.activePlanId);
@@ -119,7 +125,7 @@ export default function ProjectApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const modalOpen = Boolean(state.confirmation) || Boolean(state.formatUpgrade) || (creatingQuarter && Boolean(state.project))
-    || tabDialog;
+    || (helpOpen && Boolean(state.project)) || tabDialog;
   useEffect(() => { page.current?.toggleAttribute("inert", modalOpen); }, [modalOpen]);
 
   async function chooseProject(create: boolean) {
@@ -131,14 +137,14 @@ export default function ProjectApp() {
     setChoosingFolder(true);
     try {
       const done = create ? await actions.chooseAndCreateProject(newProjectName) : await actions.chooseAndOpenProject();
-      if (done) { setTab("team"); setNewProjectName(""); }
+      if (done) { setTab(create ? "team" : "plan"); setNewProjectName(""); }
     } finally { setChoosingFolder(false); }
   }
 
   async function createQuarter(year: number, quarter: Quarter, mode: CalendarMode, copyFrom: string | null) {
     setCreatingQuarter(false);
     setUiError("");
-    if (await actions.createPlan(year, quarter, mode, copyFrom)) setTab("team");
+    if (await actions.createPlan(year, quarter, mode, copyFrom)) setTab(copyFrom ? "plan" : "team");
   }
 
   function cancelRename() {
@@ -177,6 +183,7 @@ export default function ProjectApp() {
         <img src={appIcon} alt="" width={64} height={64} />
         <div><h1>Capacity Planner</h1><p className="project-welcome-subtitle">Планирование ёмкости команды</p></div>
       </header>
+      {PREVIEW_VERSION && <p className="project-message warning project-preview-note">Тестовая версия {PREVIEW_VERSION} с новым форматом проектов. Открывайте учебные проекты или копии своих: проект версии 0.3.0 при первом сохранении обновляется, и версия 0.3.0 его уже не откроет. Перед обновлением создаётся резервная копия.</p>}
       <p className="project-welcome-lead">Люди, рабочие дни и распределение часов на квартал. Каждая команда хранится в отдельной папке на вашем компьютере.</p>
       {messages}
       <div className="project-welcome-grid">
@@ -213,6 +220,7 @@ export default function ProjectApp() {
             <button className="project-icon-button" type="button" disabled={disabled} aria-label="Изменить название команды"
               title="Изменить название команды" onClick={() => setRenaming(true)}><PencilIcon /><span className="visually-hidden">Изменить название команды</span></button>
           </div>}
+          {PREVIEW_VERSION && <span className="project-chip preview" title="Новый формат проектов: версия 0.3.0 обновлённый проект не откроет">Тестовая версия {PREVIEW_VERSION}</span>}
           <div className="project-path" title="Папка проекта">{state.project.folderPath.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "")}</div>
         </div>
         <span className={`project-status ${state.confirmation || state.formatUpgrade || unsaved ? "dirty" : "saved"}`} role="status">{status}</span>
@@ -235,6 +243,7 @@ export default function ProjectApp() {
                 .map((plan) => <option key={plan.planId} value={plan.planId}>{plan.snapshot.quarter} квартал {plan.snapshot.year} года</option>)}
             </select></label>
           <button className="secondary" type="button" disabled={disabled} onClick={() => setCreatingQuarter(true)}>Новый квартал…</button>
+          <button className="project-link-button project-help-link" type="button" disabled={disabled} onClick={() => setHelpOpen(true)}>Как составить план квартала</button>
           {state.draft && <div className="project-period-side">
             {!state.report.available && state.report.hint && <span className="project-muted project-report-hint" role="status">{reportHint(state.report.hint)}</span>}
             <PeriodFacts snapshot={state.draft} result={result} />
@@ -261,7 +270,11 @@ export default function ProjectApp() {
               {tab === "sources" && state.activePlanId && <SourcesTab planId={state.activePlanId} quarter={quarterTitle(state.draft)}
                 snapshot={state.draft} saved={savedPlan?.snapshot ?? null} result={result} savedResult={savedResult}
                 update={actions.updateDraft} setPending={setPending} saveHint={saveHint} onDialog={onTabDialog} />}
-              {tab === "tasks" && <TasksEditor snapshot={state.draft} update={actions.updateDraft} onGoToAllocation={() => setTab("sources")} />}
+              {tab === "plan" && state.activePlanId && <PlanTab planId={state.activePlanId} quarter={quarterTitle(state.draft)}
+                snapshot={state.draft} result={result} update={actions.updateDraft}
+                workInputs={state.workInputs} lastMarks={state.lastMarks}
+                setWorkInput={actions.setWorkInput} rememberMark={actions.rememberMark}
+                sourceId={planSource} onSourceChange={setPlanSource} onGoToTab={setTab} />}
             </section>
           </fieldset>
         </>}
@@ -269,6 +282,7 @@ export default function ProjectApp() {
     </>}
     </div>
     <div id={DIALOG_ROOT_ID} />
+    {helpOpen && state.project && <HelpDialog onClose={() => setHelpOpen(false)} onGoToTab={(next) => { setHelpOpen(false); setTab(next); }} />}
     {creatingQuarter && state.project && <NewQuarterDialog plans={state.plans} onCancel={() => setCreatingQuarter(false)}
       onCreate={(year, quarter, mode, copyFrom) => { void createQuarter(year, quarter, mode, copyFrom); }} />}
     {state.confirmation && <DiscardDialog message={state.confirmation.message} details={state.confirmation.details}

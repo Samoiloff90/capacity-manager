@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -13,8 +14,12 @@ export const fflateSyncZipAlias = {
   replacement: fileURLToPath(new URL("./src/export/fflate-sync-zip.ts", import.meta.url))
 };
 
+/** Shown in the window: a preview build names its version (0.4.0-alpha.1). */
+export const appVersion = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version as string;
+
 export default defineConfig({
   plugins: [react()],
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   resolve: { alias: [fflateSyncZipAlias] },
   clearScreen: false,
   server: {

@@ -126,7 +126,8 @@ export function useCommittedText<T>(options: {
       value: text,
       "data-col": column,
       "aria-invalid": Boolean(error),
-      onFocus: () => { focused.current = true; atFocus.current = text; },
+      // Focus coming back to a field with an error (after a refused save) keeps the value to return to.
+      onFocus: () => { focused.current = true; if (!error) atFocus.current = text; },
       onBlur: () => {
         focused.current = false;
         const parsed = parse(text);

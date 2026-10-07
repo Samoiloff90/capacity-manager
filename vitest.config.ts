@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { fflateSyncZipAlias } from "./vite.config";
+import { appVersion, fflateSyncZipAlias } from "./vite.config";
 
 // Reports show local time; recorded fixtures were made in Moscow time. CI runs in UTC, so
 // the test processes (forked from here) get the same zone everywhere.
@@ -7,6 +7,7 @@ process.env.TZ = "Europe/Moscow";
 
 export default defineConfig({
   resolve: { alias: [fflateSyncZipAlias] },
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   test: {
     environment: "node",
     globals: true,
