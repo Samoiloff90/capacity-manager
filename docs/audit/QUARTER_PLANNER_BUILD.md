@@ -116,6 +116,22 @@
 - **Windows x64:** EXE, portable ZIP, Vitest, TypeScript, Rust-тесты.
 - **Проверка файлов релиза:** набор файлов с `.dmg` и учебными проектами, контрольные суммы.
 
+## Pre-release
+
+- Тег `v0.4.0-alpha.1` на коммите `a9a6dc1` (запуск ветки:
+  <https://github.com/Samoiloff90/capacity-manager/actions/runs/37632849933>, запуск тега:
+  <https://github.com/Samoiloff90/capacity-manager/actions/runs/37634485785> — PASS).
+- Релиз <https://github.com/Samoiloff90/capacity-manager/releases/tag/v0.4.0-alpha.1>:
+  pre-release, не «последний». Файлы: .dmg и ZIP для macOS arm64, учебные проекты, portable
+  ZIP для Windows, скрипт наблюдения за сетью, контрольные суммы.
+- Бандл по уведомлению CI: `Capacity Planner Alpha.app`, `local.capacity-planner.alpha`,
+  0.4.0-alpha.1, arm64, LSMinimumSystemVersion 10.13 (значение сборщика; arm64 работает
+  на macOS 11 и новее), ad-hoc подпись, без нотаризации. SHA-256 .dmg —
+  `bc18facd56d3631f2425c242f2718a2ddb5969664936193e8d0daa2fd1649fa7`.
+- Файлы скачаны из релиза без входа, контрольные суммы сошлись. EXE из Windows-ZIP релиза
+  с учебными проектами из релиза (записаны на macOS-раннере) прошёл `planner-smoke`:
+  22 шага, ошибок в консоли нет.
+
 ## Не проверено
 
 - **Mac пользователя:** установка из `.dmg`, первый запуск при политике организации,
@@ -127,6 +143,6 @@
 - **Проверка сети этой версии на Windows** (NETWORK_CHECK.md) — этап 8.
 - **Системное окно выбора папки** в сквозных проверках подменено. Окно «Сохранить как» —
   настоящее.
-- **Запуск из распакованного portable ZIP** этой версии на Windows. ZIP собирается и
-  проверяется в CI.
+- `webview-smoke`, `portable-reopen-smoke`, `report-export-smoke` и `format-upgrade-smoke`
+  запускались на локальной release-сборке того же кода, не на EXE из релиза.
 - **Экранный диктор** и Excel for Mac.
