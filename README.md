@@ -4,6 +4,28 @@
 Одна команда — отдельная папка с SQLite; расчёты выполняются на компьютере,
 проекты хранятся локально. Стек: Tauri 2, React 18, TypeScript и SQLite.
 
+## Тестовая версия 0.4.0-alpha.1 (ветка `quarter-planner`)
+
+Промежуточная сборка квартального планировщика (DEC-046, DEC-049). Приложение «Capacity
+Planner Alpha» ставится рядом со стабильной 0.3.0 и не заменяет её.
+
+Что есть:
+- вкладки «Источники и доли» (резерв со своими долями сотрудников) и «План квартала»;
+- работы с полной оценкой в часах: «На рассмотрении», «В плане квартала», «Не в этом
+  квартале»; последствия включения и отмена последнего действия;
+- итоги: резерв, занято работами, остатки квот, не распределено;
+- пояснения (i) и страница «Как составить план квартала».
+
+Проект 0.3.0 при первом сохранении обновляется до формата 2 с резервной копией.
+
+Чего ещё нет: вставка строк, отчёт заказчику и «Открыть в Kaiten», копирование работ в
+новый квартал (этапы 5–7). Установка, учебные проекты и чек-лист —
+[описание релиза](docs/releases/v0.4.0-alpha.1.md); проверки —
+[QUARTER_PLANNER_BUILD.md](docs/audit/QUARTER_PLANNER_BUILD.md). На Mac пользователя эта
+версия не запускалась.
+
+Ниже — описание стабильной 0.3.0.
+
 ## Текущая готовность
 
 - Подключён сценарий создания, открытия и закрытия проекта в выбранной папке.
@@ -279,6 +301,24 @@ Rust-теста на Windows — PASS**, release-EXE собран. На копи
 `report-export-smoke` на новой сборке тоже прошёл. Mac не проверялся —
 [FORMAT_UPGRADE.md](docs/audit/FORMAT_UPGRADE.md).
 
+Этапы 2–4 и сборка 0.4.0-alpha.1: **552 теста Vitest и 52 Rust-теста на Windows — PASS**.
+На release-EXE прошли:
+- `scripts/planner-smoke.mjs` — основной путь на копиях учебных проектов и в новом
+  проекте;
+- переведённые на новые экраны `webview-smoke`, `portable-reopen-smoke`,
+  `report-export-smoke` и `format-upgrade-smoke`.
+
+В GitHub Actions на macOS собраны .app и .dmg, приложение запущено и закрыто на раннере,
+тесты прошли. На Mac пользователя не проверялось —
+[QUARTER_PLANNER_BUILD.md](docs/audit/QUARTER_PLANNER_BUILD.md).
+
+```powershell
+# учебные проекты (вымышленные данные) в пустую папку
+$env:CAPACITY_DEMO_OUT = "D:\temp\demo"; cargo test --manifest-path src-tauri/Cargo.toml --lib write_demo_projects -- --ignored
+# release-EXE запущен с WEBVIEW2_USER_DATA_FOLDER и --remote-debugging-port=<порт>
+node --experimental-websocket scripts/planner-smoke.mjs <порт> D:\temp\demo
+```
+
 Флаг Cargo `--offline` требует заранее загруженных зависимостей.
 Windows EXE: debug-сборка — `src-tauri/target/debug/capacity-planner.exe`,
 release-сборка — `src-tauri/target/release/capacity-planner.exe`.
@@ -289,7 +329,8 @@ release-сборка — `src-tauri/target/release/capacity-planner.exe`.
 ## Сборка в GitHub Actions
 
 Workflow [Build](.github/workflows/build.yml) запускается:
-- при push кода в `main`; правки только `*.md` и `docs/` его не запускают;
+- при push кода в `main` и в рабочую ветку `quarter-planner`; правки только `*.md` и
+  `docs/` его не запускают;
 - при push тега `vX.Y.Z` — тогда он ещё и публикует релиз;
 - вручную: Actions → Build → Run workflow.
 

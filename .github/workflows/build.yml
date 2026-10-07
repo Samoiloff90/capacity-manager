@@ -124,6 +124,8 @@ jobs:
           echo "$signature" | grep -qx 'Signature=adhoc' || { echo "::error title=Inspect::bundle is not ad-hoc signed"; exit 1; }
           echo "APP_PATH=$app" >> "$GITHUB_ENV"
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          # Readable without a GitHub login through the Checks API.
+          echo "::notice title=macOS bundle::$APP_BUNDLE, $APP_ID, version $version, $(lipo -archs "$app/Contents/MacOS/$exe"), minimum macOS $minimum, ad-hoc signature, not notarized"
 
       - name: Zip with ditto and verify the round trip
         id: package
@@ -179,6 +181,7 @@ jobs:
           hdiutil detach "$mount"
           ( cd "$out" && shasum -a 256 "$name.dmg" > "$name.dmg.sha256" && cat "$name.dmg.sha256" )
           echo "MAC_DMG=$out/$name.dmg" >> "$GITHUB_ENV"
+          echo "::notice title=macOS dmg::$name.dmg SHA-256 $(cut -d' ' -f1 "$out/$name.dmg.sha256"); the .app inside verified with codesign"
           {
             echo "### macOS: \`$name.dmg\`"
             echo "SHA-256: \`$(cut -d' ' -f1 "$out/$name.dmg.sha256")\`"
