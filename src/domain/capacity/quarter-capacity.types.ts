@@ -72,11 +72,29 @@ export type QuarterCompetencyCapacity = {
   availableHours: string;
 };
 
+/** One person's part of a reserve (DEC-038): own share or the reserve's common share. */
+export type QuarterReserveMember = {
+  memberId: string;
+  availableHours: string;
+  /** Effective share; null when neither an own nor a common share is set. */
+  percent: string | null;
+  own: boolean;
+  reserveHours: string | null;
+};
+
 export type QuarterDirectionCapacity = {
   directionId: string;
   name: string;
-  /** null: the share is not set yet; the budget is then 0 and not complete. */
+  kind: DirectionKind;
+  /** null: the share is not set yet; the budget is then 0 and not complete. For a reserve: the common share. */
   percent: string | null;
+  /** The quota is known: the share is set; for a reserve, every person has a share. */
+  quotaSet: boolean;
+  /** Reserve only: people with their own share. */
+  ownPercentCount: number;
+  /** Reserve only, in team order: the reserve is the sum of these hours. */
+  reserveMembers: QuarterReserveMember[];
+  /** The quota in hours; 0 while it is not set. */
   budgetHours: string;
   knownDemandHours: string;
   missingEstimateCount: number;
@@ -87,6 +105,39 @@ export type QuarterDirectionCapacity = {
   overrunKnownHours: string;
   /** Signed remaining hours only when allocation and demand are complete; never a feasibility claim. */
   confirmedRemainingHours: string | null;
+  /** Works by planning mark; only works in the plan take the quota (knownDemandHours above). */
+  planCount: number;
+  candidateCount: number;
+  candidateKnownHours: string;
+  candidateMissingEstimateCount: number;
+  outCount: number;
+};
+
+/**
+ * The team's balance in the order the manager reads it (QUARTER_PLANNING.md): reserves →
+ * works in the plan → what is left inside quotas → not allocated to any source.
+ */
+export type QuarterPlanTotals = {
+  reserveCount: number;
+  reserveHours: string;
+  /** Sum of all quotas that are set, reserves included. */
+  allocatedHours: string;
+  /** Available hours minus allocated hours; negative when shares exceed 100%. */
+  unallocatedHours: string;
+  /** Shares exceed the available capacity (by hours; by percent when nobody is available). */
+  overallocated: boolean;
+  /** Sum of the set shares as entered; a reserve counts with its common share. */
+  nominalPercent: string;
+  /** Sources whose quota is not set yet. */
+  unsetQuotaCount: number;
+  /** Work sources only. */
+  planCount: number;
+  plannedKnownHours: string;
+  plannedMissingEstimateCount: number;
+  /** Unused parts of quotas that are set; they stay with their sources. */
+  remainingHours: string;
+  overrunHours: string;
+  overrunSourceCount: number;
 };
 
 export type QuarterCapacityResult = {
@@ -96,6 +147,7 @@ export type QuarterCapacityResult = {
   competencies: QuarterCompetencyCapacity[];
   directions: QuarterDirectionCapacity[];
   allocation: { totalPercent: string; status: "complete" | "underallocated" | "overallocated" };
+  plan: QuarterPlanTotals;
   totals: {
     memberCount: number;
     workingDays: number;

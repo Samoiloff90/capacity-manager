@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import golden from "./fixtures/compat-0.3.0.json";
 import acceptance from "./fixtures/capacity-acceptance.json";
+import { asRecorded } from "./fixtures/as-recorded";
 import { readmeQuarter } from "./fixtures/readme-quarter";
 import { getQuarterDates } from "../src/domain/capacity/calendar-quarter";
 import { describeDirectionBalance } from "../src/domain/capacity/direction-balance";
@@ -51,7 +52,13 @@ describe("quarters saved by 0.3.0 keep their numbers (DEC-044)", () => {
   it.each(cases.map((item) => [item.id, item] as const))("%s: same capacity, balances and plan status as 0.3.0", (_id, item) => {
     const snapshot = read(1, legacySnapshot(item));
     const result = calculate(snapshot);
-    expect(result).toEqual(item.result);
+    expect(asRecorded(result, item.result)).toEqual(item.result);
+    // Directions read as work sources: every work is in the plan and the quota is the share.
+    expect(result.directions.every((direction) => direction.kind === "work" && direction.quotaSet === (direction.percent !== null)
+      && direction.planCount === direction.missingEstimateCount + snapshot.tasks.filter((task) => task.directionId === direction.directionId && task.estimateHours !== null).length
+      && direction.candidateCount === 0 && direction.outCount === 0)).toBe(true);
+    expect(result.plan.reserveHours).toBe("0");
+    expect(result.plan.plannedKnownHours).toBe(result.totals.knownDemandHours);
     expect(describeQuarterTotals(result)).toEqual(item.totals);
     expect(result.directions.map((direction) => describeDirectionBalance(direction))).toEqual(item.balances);
     expect(describeQuarterPlanStatus(result)).toEqual(item.status);

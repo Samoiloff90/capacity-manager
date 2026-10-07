@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "./fixtures/capacity-acceptance.json";
+import { asRecorded } from "./fixtures/as-recorded";
 import { calculateQuarterCapacity } from "../src/domain/capacity/quarter-capacity.calculator";
 import type { QuarterCapacityResult, QuarterSnapshotV1 } from "../src/domain/capacity/quarter-capacity.types";
 import { readStoredQuarterSnapshot } from "../src/domain/capacity/quarter-snapshot-format";
@@ -56,7 +57,7 @@ function control(id: string): AcceptanceCase {
 
 describe("independent numerical acceptance against Python datetime/Fraction", () => {
   it.each(cases)("$id — $title", ({ snapshot, expected }) => {
-    expect(calculate(snapshot)).toEqual(expected);
+    expect(asRecorded(calculate(snapshot), expected)).toEqual(expected);
   });
 
   it("recalculates 5 → 20 → 5 without retained members, hours or changed task demand", () => {
@@ -67,9 +68,9 @@ describe("independent numerical acceptance against Python datetime/Fraction", ()
 
     expect(results.map(result => result.totals.availableHours)).toEqual(["400", "1600", "400"]);
     expect(results.map(result => result.totals.knownDemandHours)).toEqual(["500", "500", "500"]);
-    expect(results[1]).toEqual(expanded.expected);
-    expect(results[2]).toEqual(before.expected);
-    expect(calculate(before.snapshot)).toEqual(before.expected);
+    expect(asRecorded(results[1], expanded.expected)).toEqual(expanded.expected);
+    expect(asRecorded(results[2], before.expected)).toEqual(before.expected);
+    expect(asRecorded(calculate(before.snapshot), before.expected)).toEqual(before.expected);
   });
 
   it("uses the same exact reference when calendar, people, absences and tasks arrive in reverse order", () => {
@@ -84,7 +85,7 @@ describe("independent numerical acceptance against Python datetime/Fraction", ()
         directions: [...item.snapshot.directions].reverse(),
         tasks: [...item.snapshot.tasks].reverse(),
       };
-      expect(calculate(snapshot)).toEqual(item.expected);
+      expect(asRecorded(calculate(snapshot), item.expected)).toEqual(item.expected);
     }
   });
 });

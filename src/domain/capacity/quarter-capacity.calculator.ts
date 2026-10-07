@@ -2,12 +2,43 @@ import {
   addDecimal, compareDecimal, decimalToString, divideDecimalBy100, ExactDecimal,
   multiplyDecimal, parseDecimal, subtractDecimal
 } from "./decimal-exact";
-import type { CalculateQuarterCapacityResult, QuarterDirectionCapacity } from "./quarter-capacity.types";
+import type {
+  CalculateQuarterCapacityResult, QuarterDirectionCapacity, QuarterReserveMember, QuarterSnapshot
+} from "./quarter-capacity.types";
 import { validateQuarterSnapshot } from "./quarter-snapshot.validation";
 
 const zero = parseDecimal("0");
 const hundred = parseDecimal("100");
 const byId = (left: { id: string }, right: { id: string }) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+const share = (hours: ExactDecimal, percent: string) => divideDecimalBy100(multiplyDecimal(hours, parseDecimal(percent)));
+
+type Direction = QuarterSnapshot["directions"][number];
+type Quota = { set: boolean; hours: ExactDecimal; members: QuarterReserveMember[] };
+
+/**
+ * A work source gets its share of all available hours. A reserve is summed per person:
+ * available hours × own share, or × the common share (DEC-038). Without own shares the two
+ * are the same exact number, so quarters saved by 0.3.0 keep their budgets.
+ */
+function quota(direction: Direction, people: readonly { memberId: string; hours: ExactDecimal }[], total: ExactDecimal): Quota {
+  if (direction.kind !== "reserve") {
+    return direction.percent === null ? { set: false, hours: zero, members: [] }
+      : { set: true, hours: share(total, direction.percent), members: [] };
+  }
+  const own = new Map(direction.memberPercents.map((row) => [row.memberId, row.percent]));
+  let hours = zero;
+  let set = people.length > 0 || direction.percent !== null;
+  const members = people.map((person) => {
+    const percent = own.get(person.memberId) ?? direction.percent;
+    const reserve = percent === null ? null : share(person.hours, percent);
+    if (reserve === null) set = false; else hours = addDecimal(hours, reserve);
+    return {
+      memberId: person.memberId, availableHours: decimalToString(person.hours), percent,
+      own: own.has(person.memberId), reserveHours: reserve === null ? null : decimalToString(reserve)
+    };
+  });
+  return { set, hours: set ? hours : zero, members };
+}
 
 /** A complete, resolved quarter snapshot is the only source of calendar and capacity data. */
 export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapacityResult {
@@ -29,12 +60,14 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
   let totalAvailableDays = 0;
   const hoursByCompetency = new Map<string, ExactDecimal>();
   const countByCompetency = new Map<string, number>();
+  const hoursByMember = new Map<string, ExactDecimal>();
   const members = [...snapshot.members].sort(byId).map((member) => {
     const absenceWorkingDays = absentDatesByMember.get(member.id)?.size ?? 0;
     const availableDays = workingDates.length - absenceWorkingDays;
     const hours = multiplyDecimal(parseDecimal(String(availableDays * 8)), parseDecimal(member.fte));
     totalHours = addDecimal(totalHours, hours);
     totalAvailableDays += availableDays;
+    hoursByMember.set(member.id, hours);
     hoursByCompetency.set(member.competencyId, addDecimal(hoursByCompetency.get(member.competencyId) ?? zero, hours));
     countByCompetency.set(member.competencyId, (countByCompetency.get(member.competencyId) ?? 0) + 1);
     return {
@@ -48,6 +81,8 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
     memberCount: countByCompetency.get(competency.id) ?? 0,
     availableHours: decimalToString(hoursByCompetency.get(competency.id) ?? zero)
   }));
+  // Team order, as on the screen: the reserve window lists people as the team tab does.
+  const people = snapshot.members.map((member) => ({ memberId: member.id, hours: hoursByMember.get(member.id) ?? zero }));
 
   // A share not set yet adds nothing and leaves the allocation incomplete.
   let totalPercent = zero;
@@ -55,40 +90,71 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
     if (direction.percent !== null) totalPercent = addDecimal(totalPercent, parseDecimal(direction.percent));
   }
   const percentComparison = compareDecimal(totalPercent, hundred);
+  // MVP completeness (0.3.0): shares add up to 100%. The general report still reads it.
   const budgetComplete = percentComparison === 0 && snapshot.directions.every((direction) => direction.percent !== null);
-  let totalKnownDemand = zero;
-  let totalMissingEstimates = 0;
-  const knownDemandByDirection = new Map<string, ExactDecimal>();
-  const missingByDirection = new Map<string, number>();
+
+  type Counts = { known: ExactDecimal; missing: number; count: number };
+  const empty = (): Counts => ({ known: zero, missing: 0, count: 0 });
+  const byMark = { plan: new Map<string, Counts>(), candidate: new Map<string, Counts>(), out: new Map<string, Counts>() };
   // Only works in the quarter plan take the budget; candidates and «Не в этом квартале» do not (DEC-032).
   for (const task of snapshot.tasks) {
-    if (task.mark !== "plan") continue;
-    if (task.estimateHours === null) {
-      missingByDirection.set(task.directionId, (missingByDirection.get(task.directionId) ?? 0) + 1);
-      totalMissingEstimates += 1;
-    } else {
-      const hours = parseDecimal(task.estimateHours);
-      knownDemandByDirection.set(task.directionId, addDecimal(knownDemandByDirection.get(task.directionId) ?? zero, hours));
-      totalKnownDemand = addDecimal(totalKnownDemand, hours);
-    }
+    const counts = byMark[task.mark].get(task.directionId) ?? empty();
+    counts.count += 1;
+    if (task.estimateHours === null) counts.missing += 1;
+    else counts.known = addDecimal(counts.known, parseDecimal(task.estimateHours));
+    byMark[task.mark].set(task.directionId, counts);
   }
+
   const directions: QuarterDirectionCapacity[] = [...snapshot.directions].sort(byId).map((direction) => {
-    const budget = direction.percent === null ? zero : divideDecimalBy100(multiplyDecimal(totalHours, parseDecimal(direction.percent)));
-    const knownDemand = knownDemandByDirection.get(direction.id) ?? zero;
-    const missingEstimateCount = missingByDirection.get(direction.id) ?? 0;
-    const demandComplete = missingEstimateCount === 0;
+    const budget = quota(direction, people, totalHours);
+    const plan = byMark.plan.get(direction.id) ?? empty();
+    const candidates = byMark.candidate.get(direction.id) ?? empty();
+    const demandComplete = plan.missing === 0;
     const balanceComplete = budgetComplete && demandComplete;
-    const remaining = subtractDecimal(budget, knownDemand);
+    const remaining = subtractDecimal(budget.hours, plan.known);
     const overrun = compareDecimal(remaining, zero) < 0 ? subtractDecimal(zero, remaining) : zero;
     const remainingKnownHours = decimalToString(remaining);
     return {
-      directionId: direction.id, name: direction.name, percent: direction.percent,
-      budgetHours: decimalToString(budget), knownDemandHours: decimalToString(knownDemand),
-      missingEstimateCount, budgetComplete, demandComplete, balanceComplete,
+      directionId: direction.id, name: direction.name, kind: direction.kind, percent: direction.percent,
+      quotaSet: budget.set, ownPercentCount: direction.kind === "reserve" ? direction.memberPercents.length : 0,
+      reserveMembers: budget.members,
+      budgetHours: decimalToString(budget.hours), knownDemandHours: decimalToString(plan.known),
+      missingEstimateCount: plan.missing, budgetComplete, demandComplete, balanceComplete,
       remainingKnownHours, overrunKnownHours: decimalToString(overrun),
-      confirmedRemainingHours: balanceComplete ? remainingKnownHours : null
+      confirmedRemainingHours: balanceComplete ? remainingKnownHours : null,
+      planCount: plan.count, candidateCount: candidates.count,
+      candidateKnownHours: decimalToString(candidates.known), candidateMissingEstimateCount: candidates.missing,
+      outCount: byMark.out.get(direction.id)?.count ?? 0
     };
   });
+
+  let reserveHours = zero;
+  let allocated = zero;
+  let planned = zero;
+  let remainingHours = zero;
+  let overrunHours = zero;
+  let planCount = 0;
+  let plannedMissing = 0;
+  let overrunSourceCount = 0;
+  for (const direction of directions) {
+    if (!direction.quotaSet) continue;
+    allocated = addDecimal(allocated, parseDecimal(direction.budgetHours));
+    if (direction.kind === "reserve") reserveHours = addDecimal(reserveHours, parseDecimal(direction.budgetHours));
+  }
+  for (const direction of directions) {
+    if (direction.kind === "reserve") continue;
+    planned = addDecimal(planned, parseDecimal(direction.knownDemandHours));
+    plannedMissing += direction.missingEstimateCount;
+    planCount += direction.planCount;
+    if (!direction.quotaSet) continue;
+    if (direction.overrunKnownHours !== "0") {
+      overrunHours = addDecimal(overrunHours, parseDecimal(direction.overrunKnownHours));
+      overrunSourceCount += 1;
+    } else {
+      remainingHours = addDecimal(remainingHours, parseDecimal(direction.remainingKnownHours));
+    }
+  }
+  const unallocated = subtractDecimal(totalHours, allocated);
 
   return { ok: true, result: {
     year: snapshot.year,
@@ -98,11 +164,27 @@ export function calculateQuarterCapacity(input: unknown): CalculateQuarterCapaci
       totalPercent: decimalToString(totalPercent),
       status: budgetComplete ? "complete" : percentComparison > 0 ? "overallocated" : "underallocated"
     },
+    plan: {
+      reserveCount: directions.filter((direction) => direction.kind === "reserve").length,
+      reserveHours: decimalToString(reserveHours),
+      allocatedHours: decimalToString(allocated),
+      unallocatedHours: decimalToString(unallocated),
+      // Nobody available: every quota is 0 h, the entered shares still tell an excess.
+      overallocated: compareDecimal(totalHours, zero) > 0 ? compareDecimal(unallocated, zero) < 0 : percentComparison > 0,
+      nominalPercent: decimalToString(totalPercent),
+      unsetQuotaCount: directions.filter((direction) => !direction.quotaSet).length,
+      planCount,
+      plannedKnownHours: decimalToString(planned),
+      plannedMissingEstimateCount: plannedMissing,
+      remainingHours: decimalToString(remainingHours),
+      overrunHours: decimalToString(overrunHours),
+      overrunSourceCount
+    },
     totals: {
       memberCount: members.length, workingDays: workingDates.length,
       availableDays: totalAvailableDays, availableHours: decimalToString(totalHours),
-      knownDemandHours: decimalToString(totalKnownDemand), missingEstimateCount: totalMissingEstimates,
-      demandComplete: totalMissingEstimates === 0
+      knownDemandHours: decimalToString(planned), missingEstimateCount: plannedMissing,
+      demandComplete: plannedMissing === 0
     }
   } };
 }
