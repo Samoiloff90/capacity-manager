@@ -37,5 +37,14 @@ src-tauri/gen/
 .secrets/
 *.log
 
+# Spreadsheets and table exports may hold real data; tests write theirs outside the repository.
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.ods
+*.csv
+*.numbers
+
 # Personal Claude Code overrides.
 .claude/settings.local.json
