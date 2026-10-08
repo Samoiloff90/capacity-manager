@@ -173,9 +173,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\network-check-window
 4. **Совместимость.** Проект 0.3.0 обновляется при первом сохранении, с копией; после этого
    0.3.0 его не откроет, возврат — через копию.
 5. **Сеть.** Приложение само в сеть не обращается, телеметрии нет. WebView2 и WKWebView
-   могут обращаться к Microsoft и Apple в фоне (DEC-023). Windows проверена на alpha.2;
-   одно соединение вне NetLog не проверено по содержимому, холодный запуск без сети не
-   проверен. Mac пользователя и файлы RC не проверены.
+   могут обращаться к Microsoft и Apple в фоне (DEC-023). Windows проверена на ZIP alpha.2 и
+   ZIP rc.1: меток данных в трафике нет, у приложения своих внешних соединений нет. Одно
+   соединение WebView2 вне NetLog не проверено по содержимому, холодный запуск без сети не
+   проверен. Mac пользователя не проверен.
 6. **Граница доверия окна (Q-001).** Скрипт в главном окне может работать с любыми
    существующими базами SQLite пользователя и записать копию проекта в любое доступное
    место. Пути исполнения постороннего скрипта не найдено; ограничение предложено, не
@@ -200,4 +201,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\network-check-window
 
 ## Кандидат: файлы
 
-Заполняется после публикации pre-release.
+- **Pre-release:** <https://github.com/Samoiloff90/capacity-manager/releases/tag/v0.4.0-rc.1>
+  — pre-release, не черновик, не «последний» (последнего релиза в репозитории нет).
+- **Исходники:** тег `v0.4.0-rc.1` (объект тега `d30235bb35953e78fd3a6b0b25a00be4d6837ee9`)
+  указывает на коммит `dc6f0004f6a375d8af8338fd56249fec03e7df93`.
+- **CI:**
+  - запуск тега 37793931530 — PASS: Windows, macOS, проверка файлов, публикация;
+  - запуск ветки на том же коммите 37792126229 — PASS.
+- **macOS:** «Capacity Planner RC.app», `local.capacity-planner.alpha`, версия
+  `0.4.0-rc.1`, arm64, подпись ad-hoc, без нотаризации (отметка CI). На раннере
+  приложение запущено и закрыто, наблюдение за сетью соединений не обнаружило. На Mac
+  пользователя не запускалось.
+- Файлы скачаны без входа 2026-10-08; суммы совпали с файлами `.sha256`, а у .dmg — и с
+  отметкой CI.
+
+| Файл | SHA-256 |
+| --- | --- |
+| `Capacity-Planner-0.4.0-rc.1-macos-arm64.dmg` | `f22927dbb00037b262d0089317f457192474ea4b9c89884b526965db0a8fe352` |
+| `Capacity-Planner-0.4.0-rc.1-macos-arm64.zip` | `9c80636c5b44e4a65a97a4b0a45b8f3e13bbb6a3cc92da7a406628e70be356d4` |
+| `Capacity-Planner-0.4.0-rc.1-windows-x64-system-webview2.zip` | `4fb110dd63ee78e3ac24b3b60c76f2ae3746b834ce85e66f82266d931a8d6e44` |
+| `Capacity-Planner-0.4.0-rc.1-demo-projects.zip` | `5bc1dc8245b02bece1cbccd387753c9181b61070b609d7d8b2d475f41b63686e` |
+| `capacity-network-watch-macos.sh` | `d082ff6dd7e771c1b906586e7475aaf174a2f39a05a75d009a33097ceebd6f04` |
+
+Внутри Windows ZIP — «Capacity Planner RC 0.4.0-rc.1». В учебных проектах — оба проекта,
+шаблон и README.
+
+Проверка сети на ZIP релиза (`network-check-windows.ps1 -Tag v0.4.0-rc.1`) — PASS:
+- контрольная метка найдена; меток данных нет;
+- `planner-smoke` внутри прошёл;
+- внешние хосты — только `config.edge.skype.com`;
+- одно соединение WebView2 вне NetLog не проверено по содержимому.
+
+Подробности — RESPONSES.md.
