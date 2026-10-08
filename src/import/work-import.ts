@@ -1,7 +1,7 @@
 import type { QuarterSnapshot, TaskMark } from "../domain/capacity/quarter-capacity.types";
 import { isWebLink, QUARTER_INPUT_LIMITS } from "../domain/capacity/quarter-snapshot.validation";
 import { pluralRu } from "../domain/capacity/quarter-totals";
-import { isSizeLabel, parseEstimateInput, sumEstimates, type EstimateInput } from "../domain/capacity/source-plan";
+import { formatPercent, isSizeLabel, parseEstimateInput, sumEstimates, type EstimateInput } from "../domain/capacity/source-plan";
 import { parseTableText, toTableText } from "./table-text";
 
 /**
@@ -83,6 +83,8 @@ export type PreviewRow = Readonly<{
   /** What the row says about its source, if a column is read as «Источник». */
   sourceText: string;
   sourceId: string | null;
+  /** Shown in the source list while no source is resolved: why one has to be chosen. */
+  sourceHint: string;
   estimate: string | null;
   issues: readonly RowIssue[];
   blocked: boolean;
@@ -274,15 +276,13 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
   const column = (field: ImportField) => draft.roles.indexOf(field);
   const sourceColumn = column("source");
   const sourceById = new Map(snapshot.directions.map((direction) => [direction.id, direction]));
-  const sourcesByName = new Map<string, Snapshot["directions"][number]>();
+  const sourcesByName = new Map<string, Snapshot["directions"][number][]>();
   for (const direction of snapshot.directions) {
     const key = normalizeName(direction.name);
-    const known = sourcesByName.get(key);
-    // A work source wins over a reserve of the same name.
-    if (!known || (known.kind === "reserve" && direction.kind === "work")) sourcesByName.set(key, direction);
+    sourcesByName.set(key, [...sourcesByName.get(key) ?? [], direction]);
   }
-  const defaultSource = draft.sourceId && sourceById.get(draft.sourceId)?.kind === "work" ? draft.sourceId : null;
-  const sourceName = (id: string) => sourceById.get(id)?.name.trim() || "Без названия";
+  const labels = sourceLabels(snapshot.directions);
+  const sourceName = (id: string) => labels.get(id) ?? "Без названия";
 
   const byLink = new Map<string, Work>();
   const byExact = new Map<string, Work>();
@@ -333,17 +333,35 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
     const comment = values.comment.trim();
     if (comment.length > QUARTER_INPUT_LIMITS.commentCharacters) issues.push({ level: "error", field: "comment", text: `Комментарий длиннее ${QUARTER_INPUT_LIMITS.commentCharacters} символов.` });
 
-    // Sources are never created or swapped silently (DEC-050): an unknown name is an error.
+    // Sources are never created or swapped silently (DEC-050). A source chosen in the preview is
+    // the only one checked: if it was deleted or became a reserve, the row waits for a new choice
+    // instead of falling back to its text or the open source. A name that fits several sources
+    // of works is not guessed either.
     let sourceId: string | null = null;
+    let sourceHint = "— выберите —";
+    const sourceError = (text: string, hint: string) => {
+      issues.push({ level: "error", field: "source", text });
+      sourceHint = hint;
+    };
     const chosen = draft.sources[index];
-    if (chosen !== undefined && sourceById.get(chosen)?.kind === "work") sourceId = chosen;
-    else if (sourceColumn >= 0 && sourceText) {
-      const found = sourcesByName.get(normalizeName(sourceText));
-      if (found?.kind === "work") sourceId = found.id;
-      else if (found) issues.push({ level: "error", field: "source", text: `«${sourceText}» — резерв: работы в него не добавляются. Выберите источник работ.` });
-      else issues.push({ level: "error", field: "source", text: `Источника «${sourceText}» нет в этом квартале. Источники при загрузке не создаются: выберите существующий.` });
-    } else if (defaultSource) sourceId = defaultSource;
-    else issues.push({ level: "error", field: "source", text: "Не указан источник." });
+    if (chosen !== undefined) {
+      const direction = sourceById.get(chosen);
+      if (direction?.kind === "work") sourceId = chosen;
+      else if (direction) sourceError(`Выбранный источник «${sourceName(chosen)}» стал резервом: работы в него не добавляются. Выберите источник работ.`, `«${sourceName(chosen)}» — резерв`);
+      else sourceError("Выбранный источник удалён из квартала. Выберите источник.", "— выбранный удалён —");
+    } else if (sourceColumn >= 0 && sourceText) {
+      const found = sourcesByName.get(normalizeName(sourceText)) ?? [];
+      const forWorks = found.filter((direction) => direction.kind === "work");
+      // A reserve takes no works, so a reserve of the same name does not make the name ambiguous.
+      if (forWorks.length === 1) sourceId = forWorks[0].id;
+      else if (forWorks.length > 1) sourceError(`Источников с названием «${sourceText}» в квартале ${forWorks.length}. Выберите нужный.`, `«${sourceText}» — несколько`);
+      else if (found.length) sourceError(`«${sourceText}» — резерв: работы в него не добавляются. Выберите источник работ.`, `«${sourceText}» — резерв`);
+      else sourceError(`Источника «${sourceText}» нет в этом квартале. Источники при загрузке не создаются: выберите существующий.`, `«${sourceText}» — нет такого`);
+    } else if (draft.sourceId) {
+      const direction = sourceById.get(draft.sourceId);
+      if (direction?.kind === "work") sourceId = draft.sourceId;
+      else sourceError("Источник для строк без своего удалён или стал резервом. Выберите источник.", "— выберите —");
+    } else sourceError("Не указан источник.", "— выберите —");
 
     // Repeats: a link already in the quarter or above, the same work again, then a similar name.
     const key = link ? linkKey(link) : null;
@@ -370,7 +388,7 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
       if (!rowByName.has(nameKey)) rowByName.set(nameKey, line);
     }
     const checked = !blocked && (draft.checked[index] ?? !repeat);
-    rows.push({ index, line, values, sourceText, sourceId, estimate, issues, blocked, repeat, checked });
+    rows.push({ index, line, values, sourceText, sourceId, sourceHint, estimate, issues, blocked, repeat, checked });
   });
 
   const checked = rows.filter((row) => row.checked);
@@ -396,6 +414,24 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
     })),
     overLimit: snapshot.tasks.length + checked.length > QUARTER_INPUT_LIMITS.entitiesPerCollection
   };
+}
+
+/**
+ * Names of the sources of works as the preview lists them. Sources may share a name (nothing
+ * forbids it); those get their place in the quarter and their share, so the choice is visible.
+ */
+export function sourceLabels(directions: Snapshot["directions"]): ReadonlyMap<string, string> {
+  const named = (direction: Snapshot["directions"][number]) => direction.name.trim() || "Без названия";
+  const counts = new Map<string, number>();
+  for (const direction of directions) {
+    if (direction.kind === "work") counts.set(normalizeName(named(direction)), (counts.get(normalizeName(named(direction))) ?? 0) + 1);
+  }
+  return new Map(directions.map((direction, index) => {
+    const name = named(direction);
+    if ((counts.get(normalizeName(name)) ?? 0) < 2) return [direction.id, name];
+    const share = direction.percent === null ? "доля не задана" : formatPercent(direction.percent);
+    return [direction.id, `${name} (${index + 1}-й в списке, ${share})`];
+  }));
 }
 
 /** «6 работ: 132 ч и 2 без оценки». */
@@ -456,7 +492,8 @@ export function applyImport(draft: ImportDraft, snapshot: Snapshot, newId: () =>
 } {
   const preview = previewImport(draft, snapshot);
   if (preview.overLimit) throw new Error("В квартале будет больше работ, чем помещается в одном квартале. Добавьте часть строк.");
-  const sourceName = (id: string) => snapshot.directions.find((direction) => direction.id === id)?.name.trim() ?? "";
+  const labels = sourceLabels(snapshot.directions);
+  const sourceName = (id: string) => labels.get(id) ?? "";
   const added = preview.checked.map((row) => ({
     row,
     work: {

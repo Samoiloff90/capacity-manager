@@ -5,7 +5,7 @@ import { pluralRu } from "../domain/capacity/quarter-totals";
 import { describeBatchInclusion } from "../domain/capacity/source-plan";
 import {
   applyImport, COLUMN_ROLES, createImportDraft, describeGroup, IMPORT_LIMITS, previewImport, ROLE_LABELS, setColumnRole,
-  setHasHeader, setRowChecked, setRowSource, setRowText, skippedTableText, withoutEstimate,
+  setHasHeader, setRowChecked, setRowSource, setRowText, skippedTableText, sourceLabels, withoutEstimate,
   type ColumnRole, type ImportDraft, type ImportOutcome, type PreviewRow, type RowIssue, type TextField
 } from "../import/work-import";
 import { DialogPortal, useDialogFocus } from "./project-ui";
@@ -127,6 +127,7 @@ function RowsStage(props: ImportDialogProps & { draft: ImportDraft }) {
   // the rows whose content changed render again.
   const preview = useMemo(() => previewImport(draft, snapshot), [draft, snapshot]);
   const workSources = useMemo(() => snapshot.directions.filter((direction) => direction.kind === "work"), [snapshot.directions]);
+  const labels = useMemo(() => sourceLabels(snapshot.directions), [snapshot.directions]);
   const latest = useRef({ draft, onDraft: props.onDraft });
   latest.current = { draft, onDraft: props.onDraft };
   const update = useCallback((change: Change) => { setError(""); latest.current.onDraft(change(latest.current.draft)); }, []);
@@ -166,7 +167,7 @@ function RowsStage(props: ImportDialogProps & { draft: ImportDraft }) {
   // An overrun comes first: it must not hide below the other sources.
   const effects = preview.groups.map((group) => {
     const capacity = result?.directions.find((row) => row.directionId === group.sourceId);
-    const name = snapshot.directions.find((direction) => direction.id === group.sourceId)?.name.trim() || "Без названия";
+    const name = labels.get(group.sourceId) ?? "Без названия";
     const batch = capacity ? describeBatchInclusion(capacity, group.estimates, hours) : null;
     return { tone: batch?.tone ?? "unknown", node: <li key={group.sourceId}><b>«{name}»</b>: {describeGroup(group, hours)}.{" "}
       {!batch ? <span className="project-muted">Последствие появится после заполнения данных квартала.</span>
@@ -201,7 +202,7 @@ function RowsStage(props: ImportDialogProps & { draft: ImportDraft }) {
         {showSource && <label className="pp-import-default">{sourceColumn ? "Строки без источника — в" : "Все строки — в источник"}
           <select id="import-default-source" value={draft.sourceId ?? ""} onChange={(event) => update((current) => ({ ...current, sourceId: event.target.value || null }))}>
             <option value="">{sourceColumn ? "— не добавлять —" : "— выберите источник —"}</option>
-            {workSources.map((item) => <option key={item.id} value={item.id}>{item.name.trim() || "Без названия"}</option>)}
+            {workSources.map((item) => <option key={item.id} value={item.id}>{labels.get(item.id)}</option>)}
           </select></label>}
       </div>
       {preview.noNameColumn && <p className="project-field-error" role="alert">Выберите столбец с названием работы.</p>}
@@ -210,7 +211,7 @@ function RowsStage(props: ImportDialogProps & { draft: ImportDraft }) {
         <thead><tr><th className="pp-col-tick">Стр.</th>
           <th className="pp-col-name">Название</th><th className="pp-col-est">Оценка, ч</th><th>Ссылка</th><th>Комментарий</th>
           {showSource && <th className="pp-col-source">Источник</th>}<th className="pp-col-check-text">Проверка</th></tr></thead>
-        <tbody>{preview.rows.map((row) => <ImportRow key={row.index} row={row} showSource={showSource} sources={workSources} update={update} />)}
+        <tbody>{preview.rows.map((row) => <ImportRow key={row.index} row={row} showSource={showSource} sources={workSources} labels={labels} update={update} />)}
           {!preview.rows.length && <tr><td colSpan={showSource ? 7 : 6} className="project-table-empty">В строках нет данных: только пустые строки.</td></tr>}
         </tbody></table></div>
     </div>
@@ -238,8 +239,8 @@ function RowsStage(props: ImportDialogProps & { draft: ImportDraft }) {
 const FIELD_LABEL: Record<TextField, string> = { name: "Название", estimate: "Оценка, ч", link: "Ссылка", comment: "Комментарий" };
 
 /** A row renders again only when its own content changes (1 000 rows, a keystroke at a time). */
-const ImportRow = memo(function ImportRow({ row, showSource, sources, update }: {
-  row: PreviewRow; showSource: boolean; sources: readonly Source[]; update: (change: Change) => void;
+const ImportRow = memo(function ImportRow({ row, showSource, sources, labels, update }: {
+  row: PreviewRow; showSource: boolean; sources: readonly Source[]; labels: ReadonlyMap<string, string>; update: (change: Change) => void;
 }) {
   const id = (field: string) => `import-${field}-${row.index}`;
   const issueId = (index: number) => `import-issue-${row.index}-${index}`;
@@ -259,8 +260,8 @@ const ImportRow = memo(function ImportRow({ row, showSource, sources, update }: 
     {cell("name")}{cell("estimate")}{cell("link")}{cell("comment")}
     {showSource && <td><select id={id("source")} aria-label={`Источник, строка ${row.line}`} aria-invalid={invalid("source")} aria-describedby={about("source")}
       value={row.sourceId ?? ""} onChange={(event) => { const value = event.target.value; update((draft) => setRowSource(draft, row.index, value)); }}>
-      {!row.sourceId && <option value="" disabled>{row.sourceText ? `«${row.sourceText}» — нет такого` : "— выберите —"}</option>}
-      {sources.map((item) => <option key={item.id} value={item.id}>{item.name.trim() || "Без названия"}</option>)}
+      {!row.sourceId && <option value="" disabled>{row.sourceHint}</option>}
+      {sources.map((item) => <option key={item.id} value={item.id}>{labels.get(item.id)}</option>)}
     </select></td>}
     <td className="pp-import-issues">{row.issues.length
       ? <ul>{row.issues.map((issue, index) => <li key={index}><span id={issueId(index)}><Sign tone={ISSUE_TONE[issue.level]}>{issue.level === "repeat" ? `Повтор. ${issue.text}` : issue.text}</Sign></span>
@@ -268,7 +269,7 @@ const ImportRow = memo(function ImportRow({ row, showSource, sources, update }: 
           onClick={() => { update((draft) => withoutEstimate(draft, row)); focusLater(id("estimate")); }}>Добавить без оценки</button>}</li>)}</ul>
       : <Sign tone="fits">Готово к добавлению</Sign>}</td>
   </tr>;
-}, (before, after) => before.showSource === after.showSource && before.sources === after.sources && before.update === after.update
+}, (before, after) => before.showSource === after.showSource && before.sources === after.sources && before.labels === after.labels && before.update === after.update
   && JSON.stringify(before.row) === JSON.stringify(after.row));
 
 function OutcomeStage(props: ImportDialogProps & { draft: ImportDraft; outcome: ImportOutcome; focusRef: RefObject<HTMLElement> }) {

@@ -8,7 +8,7 @@ import { parseTableText, toTableText } from "../src/import/table-text";
 import {
   applyImport, changedSinceImport, createImportDraft, describeGroup, guessRoles, headerField, parseImportEstimate,
   pendingRowCount, previewImport, removeImported, setColumnRole, setHasHeader, setRowChecked, setRowSource, setRowText,
-  skippedTableText, withoutEstimate, type ImportBatch, type ImportDraft, type PreviewRow
+  skippedTableText, sourceLabels, withoutEstimate, type ImportBatch, type ImportDraft, type PreviewRow
 } from "../src/import/work-import";
 import { currentDemoQuarter } from "./fixtures/demo-projects";
 import { IMPORT_TEMPLATE_ROWS, templateClipboardText } from "./fixtures/import-template";
@@ -283,6 +283,90 @@ describe("fixing rows in the preview", () => {
     expect(rowAt(rows, 4).issues).toEqual([]);
     // The same name, hours and link once more is a repeat: unticked.
     expect(rowAt(rows, 5).issues).toEqual([{ level: "repeat", field: "name", text: "Повтор строки 2." }]);
+  });
+});
+
+describe("the chosen source is never replaced (R-004, R-005)", () => {
+  type Source = QuarterSnapshot["directions"][number];
+  const without = (snapshot: QuarterSnapshot, id: string): QuarterSnapshot => ({
+    ...snapshot, directions: snapshot.directions.filter((item) => item.id !== id), tasks: snapshot.tasks.filter((task) => task.directionId !== id)
+  });
+  const asReserve = (snapshot: QuarterSnapshot, id: string): QuarterSnapshot => ({
+    ...snapshot, directions: snapshot.directions.map((item) => item.id === id ? { ...item, kind: "reserve" } : item),
+    tasks: snapshot.tasks.filter((task) => task.directionId !== id)
+  });
+  const withSource = (snapshot: QuarterSnapshot, source: Source): QuarterSnapshot => ({ ...snapshot, directions: [...snapshot.directions, source] });
+  const debtPlanned = (snapshot: QuarterSnapshot) => {
+    const result = calculateQuarterCapacity(snapshot);
+    if (!result.ok) throw new Error("расчёт");
+    return result.result.directions.find((row) => row.directionId === "src-debt")!.knownDemandHours;
+  };
+
+  it("QA-I04: a chosen source deleted or made a reserve stops the row; it does not fall back to the column", () => {
+    const snapshot = currentDemoQuarter();
+    // The column says «Техдолг»; the user chose «Продукт «Витрина»» on purpose, for the plan.
+    const draft = { ...setRowSource(draftOf("Название\tОценка, ч\tИсточник\nПеренос\t28\tТехдолг\n"), 1, "src-product"), mark: "plan" as const };
+    expect(rowAt(previewImport(draft, snapshot).rows, 2).sourceId).toBe("src-product");
+
+    for (const [after, text, hint] of [
+      [without(snapshot, "src-product"), "Выбранный источник удалён из квартала. Выберите источник.", "— выбранный удалён —"],
+      [asReserve(snapshot, "src-product"), "Выбранный источник «Продукт «Витрина»» стал резервом: работы в него не добавляются. Выберите источник работ.", "«Продукт «Витрина»» — резерв"]
+    ] as const) {
+      expect(validateQuarterSnapshot(after).ok).toBe(true);
+      const row = rowAt(previewImport(draft, after).rows, 2);
+      expect(row).toMatchObject({ sourceId: null, sourceHint: hint, blocked: true, checked: false });
+      expect(row.issues).toEqual([{ level: "error", field: "source", text }]);
+      const applied = applyImport(draft, after, newId);
+      expect(applied.works).toEqual([]);
+      // The budget of the source in the column is not taken.
+      expect(debtPlanned({ ...after, tasks: [...after.tasks, ...applied.works] })).toBe(debtPlanned(after));
+      // A new explicit choice is what gets added, in the preview and in the quarter alike.
+      const chosen = setRowSource(draft, 1, "src-requests");
+      expect(rowAt(previewImport(chosen, after).rows, 2).sourceId).toBe("src-requests");
+      expect(applyImport(chosen, after, newId).works.map((work) => [work.directionId, work.estimateHours, work.mark])).toEqual([["src-requests", "28", "plan"]]);
+    }
+  });
+
+  it("rows going to the open source stop when that source is deleted or made a reserve", () => {
+    const draft = draftOf("Отчёт\t28\n", "src-product");
+    for (const after of [without(currentDemoQuarter(), "src-product"), asReserve(currentDemoQuarter(), "src-product")]) {
+      const row = previewImport(draft, after).rows[0];
+      expect(row.sourceId).toBeNull();
+      expect(row.issues).toEqual([{ level: "error", field: "source", text: "Источник для строк без своего удалён или стал резервом. Выберите источник." }]);
+    }
+  });
+
+  it("a name of several sources of works is not guessed, even from the window of one of them", () => {
+    const twin: Source = { id: "src-twin", name: "запросы  уи", percent: "5", kind: "work", memberPercents: [] };
+    const snapshot = withSource(currentDemoQuarter(), twin);
+    expect(validateQuarterSnapshot(snapshot).ok).toBe(true);
+    const draft = draftOf("Название\tОценка, ч\tИсточник\nСверка\t6\tЗапросы УИ\n", "src-twin");
+    const row = rowAt(previewImport(draft, snapshot).rows, 2);
+    expect(row).toMatchObject({ sourceId: null, sourceHint: "«Запросы УИ» — несколько", blocked: true, checked: false });
+    expect(row.issues).toEqual([{ level: "error", field: "source", text: "Источников с названием «Запросы УИ» в квартале 2. Выберите нужный." }]);
+    expect(applyImport(draft, snapshot, newId).works).toEqual([]);
+    // The explicit choice decides; the old sources keep their names.
+    const chosen = setRowSource(draft, 1, "src-twin");
+    expect(applyImport(chosen, snapshot, newId).works.map((work) => work.directionId)).toEqual(["src-twin"]);
+    expect(snapshot.directions.map((item) => item.name)).toContain("запросы  уи");
+  });
+
+  it("«е» and «ё», case and spaces make the same name; a reserve of that name takes no works", () => {
+    const snapshot = withSource(withSource(currentDemoQuarter(),
+      { id: "src-tree", name: "Ёлка", percent: "1", kind: "work", memberPercents: [] }),
+      { id: "src-tree2", name: "елка", percent: "1", kind: "work", memberPercents: [] });
+    expect(rowAt(previewImport(draftOf("Название\tИсточник\nИгрушки\tЕЛКА\n"), snapshot).rows, 2).sourceHint).toBe("«ЕЛКА» — несколько");
+    // «Встречи и ритуалы» is a reserve: a source of works with the same name is the only place for works.
+    const sameAsReserve = withSource(currentDemoQuarter(), { id: "src-meet-works", name: "Встречи и ритуалы", percent: "1", kind: "work", memberPercents: [] });
+    expect(rowAt(previewImport(draftOf("Название\tИсточник\nДемо\tВстречи и ритуалы\n"), sameAsReserve).rows, 2).sourceId).toBe("src-meet-works");
+  });
+
+  it("sources with the same name are listed with their place and share", () => {
+    const snapshot = withSource(currentDemoQuarter(), { id: "src-twin", name: "Запросы УИ ", percent: null, kind: "work", memberPercents: [] });
+    const labels = sourceLabels(snapshot.directions);
+    expect(labels.get("src-requests")).toBe("Запросы УИ (3-й в списке, 12,5%)");
+    expect(labels.get("src-twin")).toBe("Запросы УИ (6-й в списке, доля не задана)");
+    expect(labels.get("src-debt")).toBe("Техдолг");
   });
 });
 
