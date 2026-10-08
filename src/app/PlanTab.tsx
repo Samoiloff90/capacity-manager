@@ -332,7 +332,9 @@ function SourceWorkspace(props: WorkspaceProps) {
   const { planId, quarter, snapshot, result, source, capacity, undo, ghost, before, fresh, act, setGhost, setFresh, setFocusTarget } = props;
   const key = workInputKey(planId, source.id);
   const input = props.workInputs[key];
-  const [showOut, setShowOut] = useState(false);
+  // A kept form of a work outside the quarter opens its group, so the form is seen on return (R-001).
+  const [showOut, setShowOut] = useState(() => snapshot.tasks.some((task) => task.directionId === source.id && task.mark === "out"
+    && Boolean(props.workEdits[workEditKey(planId, task.id)])));
   const [copied, setCopied] = useState<{ id: string; ok: boolean } | null>(null);
   const [stuck, setStuck] = useState(false);
   const head = useRef<HTMLElement>(null);
@@ -488,8 +490,9 @@ function SourceWorkspace(props: WorkspaceProps) {
         {work.link && <span className="pp-link-chip" title={work.link}>Kaiten</span>}
         {copied?.id === work.id && copied.ok && <span className="pp-copied" role="status">Ссылка скопирована</span>}
         {isFresh && fresh && <> <span className="project-chip fresh">{fresh.label}</span></>}
-        {unapplied && <span className="pp-sub pp-draft-mark pp-edit-mark">✎ изменение не применено{" "}
-          <button type="button" className="project-link-button" onClick={() => startEdit(work)}>Продолжить изменение</button></span>}
+        {unapplied && <span className="pp-sub pp-draft-mark pp-edit-mark" role="status">✎ изменение не применено{" "}
+          <button type="button" className="project-link-button" aria-label={`Продолжить изменение работы «${work.name}»`}
+            onClick={() => startEdit(work)}>Продолжить изменение</button></span>}
         {work.comment && <span className="pp-comment">{work.comment}</span>}
         {copied?.id === work.id && !copied.ok && work.link && <span className="pp-copy-manual">
           <span className="project-muted">Скопируйте ссылку вручную:</span>

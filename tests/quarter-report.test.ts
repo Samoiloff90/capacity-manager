@@ -217,6 +217,7 @@ describe("quarter report model: the rules of the quarter planner", () => {
     expect(summary(result).get("Источников без доли")).toBe(1);
     expect(warnings(result).map((row) => value(row.cells[1])))
       .toEqual(["Доля не задана: «Продукт» — работы в плане не сравниваются с бюджетом."]);
+    expect(rows(result, "Работы").map((row) => row[4])).toEqual(["да, доля источника не задана", "да, доля источника не задана"]);
   });
 
   it("handles an empty team without NaN", () => {

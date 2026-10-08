@@ -76,6 +76,11 @@ export function formatSignedHours(value: string, format: HoursFormatter = format
   return format(value);
 }
 
+/** Non-zero and below a hundredth: shown as «<0,01 ч» on screen and in the report (R-002). */
+export function isBelowHundredth(value: string): boolean {
+  return isTinyNonzero(decimalParts(value).magnitude);
+}
+
 function isTinyNonzero(value: string): boolean {
   return value !== "0" && value.startsWith("0.") && value.slice(2, 4).padEnd(2, "0") === "00";
 }

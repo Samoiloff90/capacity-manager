@@ -335,6 +335,21 @@ try {
   assert.deepEqual(await editFields(), typed, "Esc kept the change");
   step("R-001: Esc closes the form and keeps the change, marked at the work and in the table of sources");
 
+  // A work outside the quarter: its group is closed by default, the kept form opens it again.
+  await openSource("Продукт «Витрина»");
+  await click("Не в этом квартале");
+  await menu("Новая главная страница", "Изменить…");
+  await waitFor("document.activeElement?.id === 'edit-name'", "edit form of a work outside the quarter");
+  await type("#edit-estimate", "300");
+  await tab("Команда");
+  await tab("План квартала");
+  await waitFor("document.querySelector('#source-title')?.textContent === 'Продукт «Витрина»'", "the same source after the tab");
+  assert.equal(await evaluate("document.querySelector('#edit-estimate')?.value ?? null"), "300", "the group outside the quarter opened with the form");
+  await clickSelector("#edit-cancel");
+  await waitFor("!document.querySelector('.pp-form[data-form=edit]')", "dropped on purpose");
+  await openSource("Запросы УИ");
+  step("R-001: the kept form of a work outside the quarter is shown again after another tab");
+
   await click("Закрыть проект");
   await waitFor("Boolean(document.querySelector('[role=alertdialog]'))", "dialog about the unapplied change");
   assert.equal(plain(await textOf("#discard-message")), "Незаконченный ввод работ в файл проекта не сохраняется и будет потерян:"

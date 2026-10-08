@@ -37,7 +37,7 @@ describe("independent control examples of the quarter planner (Python Fraction o
     expect(cases.map((item) => item.id)).toEqual(expect.arrayContaining([
       "dec041-included-28", "dec041-estimate-34", "reserve-80x30-40x40", "review-plan-step-2", "review-plan-step-4",
       "empty-is-not-zero", "zero-is-known", "under-allocation-80", "over-allocation-106", "small-excess-of-shares",
-      "small-overrun", "own-reserve-small-excess", "fractions"
+      "small-overrun", "overrun-below-hundredth", "own-reserve-small-excess", "fractions"
     ]));
     expect(cases.filter((item) => item.report).length).toBeGreaterThanOrEqual(8);
   });

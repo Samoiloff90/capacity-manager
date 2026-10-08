@@ -416,8 +416,8 @@ def number_cell(value):
 
 
 def excess_cell(value):
-    """An overrun or an excess is never written as 0,00."""
-    if value != 0 and round_half_away(value, 2) == 0:
+    """An overrun or an excess below a hundredth is written as «<0,01 ч», as on screen."""
+    if value != 0 and abs(value) < Fraction(1, 100):
         return "<0,01 ч" if value > 0 else "−<0,01 ч"
     return number_cell(value)
 
@@ -561,6 +561,10 @@ def quarter_controls():
     data = quarter_snapshot(10, ("1",), [work_source("a", "А", "50"), work_source("b", "Б", "50")], [quarter_work("w", "a", "40.0001", "plan")])
     cases.append(quarter_case("small-overrun", "Квота 40 ч, в плане 40,0001 ч: перебор 0,0001 ч", data, {
         "directions.0.overrunKnownHours": "0.0001", "plan.overrunHours": "0.0001", "plan.overrunSourceCount": 1,
+    }, report=True))
+    data = quarter_snapshot(10, ("1",), [work_source("a", "А", "50"), work_source("b", "Б", "50")], [quarter_work("w", "a", "40.007", "plan")])
+    cases.append(quarter_case("overrun-below-hundredth", "Перебор 0,007 ч: на экране и в файле «<0,01 ч», не 0,01", data, {
+        "directions.0.overrunKnownHours": "0.007", "plan.overrunHours": "0.007",
     }, report=True))
     data = quarter_snapshot(10, ("1",), [work_source("works", "Работы", "70"), reserve_source("meet", "Встречи", "30", {"p1": "30.00001"})])
     cases.append(quarter_case("own-reserve-small-excess", "Своя доля резерва 30,00001%: выделено 80,000008 ч из 80 ч", data, {

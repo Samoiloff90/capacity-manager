@@ -1,5 +1,5 @@
 import writeXlsxFile, { type Cell, type CellObject, type Row, type Sheet } from "write-excel-file/universal";
-import { formatHours, formatSignedHours, roundDecimal } from "../domain/capacity/input-format";
+import { formatHours, formatSignedHours, isBelowHundredth, roundDecimal } from "../domain/capacity/input-format";
 import type { QuarterReport, ReportCell, ReportRow, ReportSheet } from "./quarter-report";
 
 type CellStyle = Pick<CellObject, "fontWeight" | "backgroundColor" | "textColor">;
@@ -47,10 +47,9 @@ function toCell(cell: ReportCell, style: CellStyle): Cell {
       return { ...style, type: String, value: safeText(cell.value) };
     case "hours": {
       // Same half-away-from-zero rounding as the screen, so -0.001 shows as 0,00 there and here.
-      const rounded = roundDecimal(cell.value, 2);
-      // An overrun or an excess is never written as 0,00: «<0,01 ч», as on screen (R-002).
-      if (cell.keepNonzero && rounded === "0" && cell.value !== "0") return { ...style, type: String, value: formatSignedHours(cell.value) };
-      return decimalCell(rounded, HOURS_FORMAT, () => formatHours(cell.value), style);
+      // An overrun or an excess below a hundredth is «<0,01 ч», by the same rule as on screen (R-002).
+      if (cell.keepNonzero && isBelowHundredth(cell.value)) return { ...style, type: String, value: formatSignedHours(cell.value) };
+      return decimalCell(roundDecimal(cell.value, 2), HOURS_FORMAT, () => formatHours(cell.value), style);
     }
     case "percent":
     case "rate":

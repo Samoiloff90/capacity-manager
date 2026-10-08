@@ -175,7 +175,8 @@ export function buildQuarterReport({ teamName, snapshot, result, exportedAt }: Q
       cells: [
         text(sourceNames.get(task.directionId) ?? ""), text(task.name), text(MARK_LABELS[mark]),
         task.estimateHours === null ? text("Без оценки") : hours(task.estimateHours),
-        text(mark === "plan" ? (task.estimateHours === null ? "да, оценка неизвестна" : "да") : "нет")
+        text(mark !== "plan" ? "нет" : !sources.get(task.directionId)!.quotaSet ? "да, доля источника не задана"
+          : task.estimateHours === null ? "да, оценка неизвестна" : "да")
       ]
     }))));
 

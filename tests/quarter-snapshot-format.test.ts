@@ -188,7 +188,7 @@ describe("plan status and manager report with the fields of format 2", () => {
     const ui = sheet("Источники").rows.find((row) => row.cells[0].kind === "text" && row.cells[0].value === "УИ")!;
     expect(ui.cells[2]).toEqual({ kind: "text", value: "не задана" });
     expect(sheet("Работы").rows.map((row) => [row.cells[1], row.cells[2], row.cells[4]].map((cell) => (cell as { value: string }).value))).toEqual([
-      ["Работа p", "В плане квартала", "да"], ["Работа c", "На рассмотрении", "нет"], ["Работа o", "Не в этом квартале", "нет"]
+      ["Работа p", "В плане квартала", "да, доля источника не задана"], ["Работа c", "На рассмотрении", "нет"], ["Работа o", "Не в этом квартале", "нет"]
     ]);
   });
 });

@@ -180,6 +180,15 @@ describe("XLSX rendering of the quarter report", () => {
     expect(book["Источники"][3].slice(3, 5)).toEqual(["−0,0001%", "−<0,01 ч"]);
   });
 
+  it("an overrun of 0,007 ч is «<0,01 ч» in the file, as on screen, not 0,01", async () => {
+    const snapshot = readmeQuarter({ tasks: [
+      { id: "t1", name: "Чуть больше бюджета", directionId: "z-product", estimateHours: "50.407", mark: "plan" as const, link: null, comment: null }
+    ] });
+    const book = readWorkbook(await renderQuarterReportXlsx(buildQuarterReport({ teamName: "Команда А", snapshot, result: calculate(snapshot), exportedAt })));
+    expect(new Map(book["Сводка"].slice(1).map((row) => [row[0], row[1]])).get("Перебор квот, ч")).toBe("<0,01 ч");
+    expect(book["Источники"][1].slice(8, 9).concat(book["Источники"][1].slice(11))).toEqual(["<0,01 ч", "Перебор <0,01 ч."]);
+  });
+
   it("runs the worker-free zip shim in tests and in the production Vite config", async () => {
     expect((fflate as unknown as { WORKER_FREE_ZIP?: boolean }).WORKER_FREE_ZIP).toBe(true);
     const { default: viteConfig, fflateSyncZipAlias } = await import("../vite.config");
