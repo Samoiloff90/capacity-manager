@@ -3,6 +3,7 @@ import { getQuarterDates, isCalendarDate, Quarter } from "../src/domain/capacity
 import { calculateQuarterCapacity } from "../src/domain/capacity/quarter-capacity.calculator";
 import type { QuarterCapacityResult, QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
 import { QUARTER_INPUT_LIMITS, quarterSnapshotSchema, validateQuarterSnapshot } from "../src/domain/capacity/quarter-snapshot.validation";
+import { formatScreenHours } from "../src/domain/capacity/input-format";
 
 // Deliberately synthetic: the first 20 dates are working dates, not a normative holiday calendar.
 function calendar(year = 2026, quarter: Quarter = 1, workingDates?: string[]) {
@@ -226,6 +227,74 @@ describe("exact allocation and result completeness", () => {
 
   it("treats an empty distribution as a 0% draft, even for an empty team", () => {
     expect(calculate(snapshot({ members: [], directions: [] })).allocation).toEqual({ totalPercent: "0", status: "underallocated" });
+  });
+});
+
+/** Written out with BigInt here, independently of decimal-exact: coefficient × 10^-scale. */
+function decimalText(coefficient: bigint, scale: number): string {
+  const negative = coefficient < 0n;
+  let digits = (negative ? -coefficient : coefficient).toString();
+  while (scale > 0 && digits.endsWith("0")) { digits = digits.slice(0, -1); scale -= 1; }
+  digits = digits.padStart(scale + 1, "0");
+  const text = scale ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}` : digits;
+  return negative ? `-${text}` : text;
+}
+
+describe("long exact values of a valid snapshot (R-003, QA-C17, QA-C18)", () => {
+  const LIMIT = QUARTER_INPUT_LIMITS.decimalCharacters;
+  const work = (id: string, estimateHours: string) => ({ id, name: id, directionId: "product", estimateHours, mark: "plan" as const, link: null, comment: null });
+
+  it("QA-C17: an FTE of 1 024 characters gives exact hours and budgets, no exception", () => {
+    const fte = `0.${"1".repeat(LIMIT - 2)}`;
+    const input = snapshot({ members: [{ id: "a", name: "А", competencyId: "development", fte }] });
+    expect(validateQuarterSnapshot(input).ok).toBe(true);
+    const ones = BigInt("1".repeat(LIMIT - 2));
+    const result = calculate(input);
+    expect(result.totals.availableHours).toBe(decimalText(160n * ones, LIMIT - 2));
+    const budget = (id: string) => result.directions.find((row) => row.directionId === id)?.budgetHours;
+    expect([budget("product"), budget("meetings")]).toEqual([decimalText(160n * 20n * ones, LIMIT), decimalText(160n * 80n * ones, LIMIT)]);
+    expect(result.plan.allocatedHours).toBe(result.totals.availableHours);
+    expect(result.plan.unallocatedHours).toBe("0");
+  });
+
+  it("QA-C18: two estimates of 1 024 nines sum to 1 025 digits", () => {
+    const nines = "9".repeat(LIMIT);
+    const input = snapshot({ directions: [{ id: "product", name: "Продукт", percent: "100", kind: "work", memberPercents: [] }],
+      tasks: [work("one", nines), work("two", nines)] });
+    expect(validateQuarterSnapshot(input).ok).toBe(true);
+    const result = calculate(input);
+    const demand = `1${"9".repeat(LIMIT - 1)}8`;
+    expect(decimalText(2n * BigInt(nines), 0)).toBe(demand);
+    expect(result.totals.knownDemandHours).toBe(demand);
+    expect(result.plan.plannedKnownHours).toBe(demand);
+    expect(result.directions[0].overrunKnownHours).toBe(decimalText(2n * BigInt(nines) - 160n, 0));
+    expect(result.plan.overrunHours).toBe(result.directions[0].overrunKnownHours);
+  });
+
+  it("an own reserve share of 1 024 characters times an FTE of 1 024 characters, on screen as 17,78 ч", () => {
+    const fte = `0.${"3".repeat(LIMIT - 2)}`;
+    const own = `33.${"3".repeat(LIMIT - 3)}`;
+    const input = snapshot({
+      members: [{ id: "a", name: "А", competencyId: "development", fte }],
+      directions: [
+        { id: "meetings", name: "Встречи", percent: "10", kind: "reserve", memberPercents: [{ memberId: "a", percent: own }] },
+        { id: "product", name: "Продукт", percent: "20", kind: "work", memberPercents: [] }
+      ]
+    });
+    expect(validateQuarterSnapshot(input).ok).toBe(true);
+    const result = calculate(input);
+    const reserve = decimalText(160n * BigInt("3".repeat(LIMIT - 2)) * BigInt(`33${"3".repeat(LIMIT - 3)}`), (LIMIT - 2) + (LIMIT - 3) + 2);
+    expect(reserve.length).toBeGreaterThan(2 * LIMIT - 10);
+    expect(result.plan.reserveHours).toBe(reserve);
+    expect(result.directions[0].budgetHours).toBe(reserve);
+    expect(formatScreenHours(result.plan.reserveHours)).toBe("17,78 ч");
+  });
+
+  it("a value longer than the technical limit is refused by the check of the snapshot, before the calculation", () => {
+    const result = calculateQuarterCapacity(snapshot({ members: [{ id: "a", name: "А", competencyId: "development", fte: `0.${"1".repeat(LIMIT - 1)}` }] }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]).toMatchObject({ path: "members.0.fte", message: `Ожидается каноническое десятичное число длиной не более ${LIMIT} символов` });
   });
 });
 

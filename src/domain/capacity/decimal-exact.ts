@@ -1,16 +1,21 @@
 /** Exact finite decimals. These internal values never cross the JSON boundary. */
 export type ExactDecimal = Readonly<{ coefficient: bigint; scale: number }>;
 
-// Technical input-size protection, not a business precision or rounding rule.
+// Technical input-size protection, not a business precision or rounding rule. It guards values
+// that are entered or read from a project (isCanonicalDecimal, normalizeUserDecimal). Exact
+// results of the engine may be longer — 1 024 digits of an FTE times hours — and are parsed
+// without it: a valid snapshot always gets its result (R-003).
 export const MAX_DECIMAL_INPUT_CHARACTERS = 1024;
 const canonicalPattern = /^-?(?:0|[1-9]\d*)(?:\.\d*[1-9])?$/;
 
+/** An entered or stored value: canonical and within the technical input limit. */
 export function isCanonicalDecimal(value: string): boolean {
   return value.length <= MAX_DECIMAL_INPUT_CHARACTERS && value !== "-0" && canonicalPattern.test(value);
 }
 
+/** Any canonical decimal: input already checked by isCanonicalDecimal, or a result of the engine. */
 export function parseDecimal(value: string): ExactDecimal {
-  if (!isCanonicalDecimal(value)) throw new Error("Некорректная десятичная строка");
+  if (value === "-0" || !canonicalPattern.test(value)) throw new Error("Некорректная десятичная строка");
   const dot = value.indexOf(".");
   return normalize({
     coefficient: BigInt(value.replace(".", "")),
