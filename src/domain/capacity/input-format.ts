@@ -69,6 +69,13 @@ export function formatBalanceHours(value: string, format: HoursFormatter = forma
   return format(value);
 }
 
+/** A signed figure such as «Не распределено»: a nonzero value is never shown as 0 (R-002). */
+export function formatSignedHours(value: string, format: HoursFormatter = formatHours): string {
+  const { negative, magnitude } = decimalParts(value);
+  if (isTinyNonzero(magnitude)) return negative ? "−<0,01 ч" : "<0,01 ч";
+  return format(value);
+}
+
 function isTinyNonzero(value: string): boolean {
   return value !== "0" && value.startsWith("0.") && value.slice(2, 4).padEnd(2, "0") === "00";
 }

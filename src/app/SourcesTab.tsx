@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { formatDeficitHours } from "../domain/capacity/input-format";
+import { formatDeficitHours, formatSignedHours } from "../domain/capacity/input-format";
 import type { QuarterCapacityResult, QuarterSnapshot } from "../domain/capacity/quarter-capacity.types";
 import { reserveByPerson } from "../domain/capacity/reserve";
 import {
@@ -159,7 +159,7 @@ export function SourcesTab({ planId, quarter, snapshot, saved, result, savedResu
   return <>
     {heading}
     {allocation?.overallocated && <div className="project-message error" role="status">
-      Сумма долей {formatPercent(allocation.allocatedPercent)}: на {hours(allocation.unallocatedHours.replace(/^-/, ""))} больше доступной ёмкости. Уменьшите доли. Квартал можно сохранить, ошибка останется видна в плане.
+      Сумма долей {allocation.allocatedPercentText}: {allocation.excessHours === "0" ? "больше 100%" : `на ${formatDeficitHours(allocation.excessHours, hours)} больше доступной ёмкости`}. Уменьшите доли. Квартал можно сохранить, ошибка останется видна в плане.
     </div>}
     {drops.length > 0 && <div className="project-message warning" role="status">
       После изменения долей перебор: {drops.join("; ")}. Работы из плана сами не исключаются: решите, что оставить.
@@ -225,14 +225,14 @@ export function SourcesTab({ planId, quarter, snapshot, saved, result, savedResu
         </tr>;
       })}</tbody>
       {allocation && <tfoot>
-        <tr><td colSpan={2}>Выделено источникам</td><td className="project-number">{formatPercent(allocation.allocatedPercent)}</td>
+        <tr><td colSpan={2}>Выделено источникам</td><td className="project-number">{allocation.allocatedPercentText}</td>
           <td className="project-number">{hours(allocation.allocatedHours)}</td><td colSpan={3} /></tr>
         <tr><td colSpan={2}>Не распределено <InfoHint info="unallocated" /></td>
-          <td className="project-number">{allocation.overallocated ? <Sign tone="over">{formatPercent(allocation.unallocatedPercent)}</Sign> : formatPercent(allocation.unallocatedPercent)}</td>
-          <td className="project-number">{hours(allocation.unallocatedHours)}</td>
+          <td className="project-number">{allocation.overallocated ? <Sign tone="over">{allocation.unallocatedPercentText}</Sign> : allocation.unallocatedPercentText}</td>
+          <td className="project-number">{formatSignedHours(allocation.unallocatedHours, hours)}</td>
           <td colSpan={3}>{allocation.overallocated ? <Sign tone="over">сумма долей больше 100%</Sign>
             : result && result.plan.overrunHours !== "0"
-              ? <Sign tone="over">перебор в источниках: {hours(result.plan.overrunHours)}</Sign>
+              ? <Sign tone="over">перебор в источниках: {formatDeficitHours(result.plan.overrunHours, hours)}</Sign>
               : <span className="project-muted">ни за кем не закреплено</span>}</td></tr>
       </tfoot>}
     </table></div>
@@ -333,7 +333,7 @@ function ReserveDialog({ source, snapshot, result, saveHint, onCancel, onApply }
       <div className="pp-modal-foot">
         <div className="pp-effect-line" role="status">{total === null || after === null
           ? <span className="project-field-error">Исправьте доли выше.</span>
-          : <span>Резерв: <b>{hours(total)}</b>{now !== null && !sameOnScreen(now, total) && <> <span className="pp-was">сейчас {hours(now)}</span></>}. Не распределено станет {after.startsWith("-") ? <Sign tone="over">{hours(after)}</Sign> : hours(after)}.</span>}</div>
+          : <span>Резерв: <b>{hours(total)}</b>{now !== null && !sameOnScreen(now, total) && <> <span className="pp-was">сейчас {hours(now)}</span></>}. Не распределено станет {after.startsWith("-") ? <Sign tone="over">{formatSignedHours(after, hours)}</Sign> : formatSignedHours(after, hours)}.</span>}</div>
         <span className="project-actions"><button type="button" className="secondary" onClick={onCancel}>Отмена</button>
           <button type="button" id="reserve-apply" disabled={total === null} onClick={apply}>Применить</button><Kbd name="enter" /></span>
       </div>

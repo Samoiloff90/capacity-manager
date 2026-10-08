@@ -137,21 +137,45 @@ export function effectivePercent(source: QuarterDirectionCapacity, availableHour
 
 export type AllocationSummary = {
   allocatedHours: string;
+  /** Rounded to hundredths, with more places when hundredths would show 100% for a sum that is not. */
   allocatedPercent: string;
   unallocatedHours: string;
   unallocatedPercent: string;
+  /** Display: «100,0001%»; «более 100%» if even six places cannot show the difference. */
+  allocatedPercentText: string;
+  unallocatedPercentText: string;
+  /** Hours given to sources beyond the capacity; "0" when the sum fits. */
+  excessHours: string;
   overallocated: boolean;
 };
+
+// A difference from 100% is shown with up to this many places before it is only named.
+const MAX_PERCENT_PLACES = 6;
 
 /** «Выделено источникам» and «Не распределено»; by hours, by entered shares when nobody is available. */
 export function describeAllocation(result: Pick<QuarterCapacityResult, "plan" | "totals">): AllocationSummary {
   const available = result.totals.availableHours;
-  const allocatedPercent = ratioPercent(result.plan.allocatedHours, available, 2) ?? result.plan.nominalPercent;
+  const allocated = result.plan.allocatedHours;
+  const exactSide = compareDecimal(parseDecimal(allocated), parseDecimal(available));
+  let allocatedPercent = ratioPercent(allocated, available, 2) ?? result.plan.nominalPercent;
+  let hidden = false;
+  // A small excess or rest must not become «100%» by rounding (AGENTS.md, R-002).
+  if (ratioPercent(allocated, available, 2) !== null && exactSide !== 0) {
+    for (let places = 3; allocatedPercent === "100" && places <= MAX_PERCENT_PLACES; places += 1) {
+      allocatedPercent = ratioPercent(allocated, available, places)!;
+    }
+    hidden = allocatedPercent === "100";
+  }
+  const unallocatedPercent = decimalToString(subtractDecimal(parseDecimal("100"), parseDecimal(allocatedPercent)));
+  const unallocated = result.plan.unallocatedHours;
   return {
-    allocatedHours: result.plan.allocatedHours,
+    allocatedHours: allocated,
     allocatedPercent,
-    unallocatedHours: result.plan.unallocatedHours,
-    unallocatedPercent: decimalToString(subtractDecimal(parseDecimal("100"), parseDecimal(allocatedPercent))),
+    unallocatedHours: unallocated,
+    unallocatedPercent,
+    allocatedPercentText: hidden ? (exactSide > 0 ? "более 100%" : "менее 100%") : formatPercent(allocatedPercent),
+    unallocatedPercentText: hidden ? (exactSide > 0 ? "менее 0%" : "более 0%") : formatPercent(unallocatedPercent),
+    excessHours: unallocated.startsWith("-") ? unallocated.slice(1) : "0",
     overallocated: result.plan.overallocated
   };
 }
@@ -161,8 +185,9 @@ export function describeSaveProblems(result: QuarterCapacityResult, format: Hour
   const problems: string[] = [];
   const allocation = describeAllocation(result);
   if (allocation.overallocated) {
-    const excess = allocation.unallocatedHours.startsWith("-") ? allocation.unallocatedHours.slice(1) : "0";
-    problems.push(`сумма долей ${formatPercent(allocation.allocatedPercent)}, на ${format(excess)} больше доступной ёмкости`);
+    // Nobody is available: every quota is 0 h and only the shares tell the excess.
+    problems.push(allocation.excessHours === "0" ? `сумма долей ${allocation.allocatedPercentText} — больше 100%`
+      : `сумма долей ${allocation.allocatedPercentText}, на ${formatDeficitHours(allocation.excessHours, format)} больше доступной ёмкости`);
   }
   const over = result.directions.filter((source) => source.kind === "work" && source.quotaSet && source.overrunKnownHours !== "0");
   if (over.length) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { currentDemoQuarter } from "./fixtures/demo-projects";
 import { getQuarterDates } from "../src/domain/capacity/calendar-quarter";
-import { formatScreenHours } from "../src/domain/capacity/input-format";
+import { formatScreenHours, formatSignedHours } from "../src/domain/capacity/input-format";
 import { calculateQuarterCapacity } from "../src/domain/capacity/quarter-capacity.calculator";
 import type { QuarterCapacityResult, QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
 import {
@@ -149,7 +149,8 @@ describe("shares that are empty, too large or of nobody's capacity", () => {
 
   it("shares above 100% are shown with the excess in hours, and the quarter can still be saved", () => {
     const result = calculate(quarter(10, ["1"], [direction("a", "60"), direction("b", "46")]));
-    expect(describeAllocation(result)).toEqual({ allocatedHours: "84.8", allocatedPercent: "106", unallocatedHours: "-4.8", unallocatedPercent: "-6", overallocated: true });
+    expect(describeAllocation(result)).toEqual({ allocatedHours: "84.8", allocatedPercent: "106", unallocatedHours: "-4.8", unallocatedPercent: "-6",
+      allocatedPercentText: "106%", unallocatedPercentText: "−6%", excessHours: "4.8", overallocated: true });
     expect(describeSaveProblems(result, hours)).toEqual(["сумма долей 106%, на 4,80 ч больше доступной ёмкости"]);
   });
 
@@ -160,6 +161,49 @@ describe("shares that are empty, too large or of nobody's capacity", () => {
     expect(ratioPercent("10", "0")).toBeNull();
     expect(fillPercent(source(result, "a"))).toBeNull();
     expect(describeAllocation(result)).toMatchObject({ allocatedPercent: "106", overallocated: true });
+    // No hours to name: never «на 0 ч больше».
+    expect(describeSaveProblems(result, hours)).toEqual(["сумма долей 106% — больше 100%", "перебор квоты — «Источник a» 10 ч"]);
+  });
+});
+
+describe("a small excess is never shown as 0 (R-002, BUG-001)", () => {
+  it("QA-C15: shares 50% and 50,0001% of 160 h — 100,0001%, <0,01 ч over", () => {
+    const result = calculate(quarter(20, ["1"], [direction("a", "50"), direction("b", "50.0001")]));
+    // 160 × 1,000001 = 160,00016 h given to sources, 0,00016 h more than available.
+    expect([result.plan.allocatedHours, result.plan.unallocatedHours, result.plan.overallocated]).toEqual(["160.00016", "-0.00016", true]);
+    expect(describeAllocation(result)).toMatchObject({
+      allocatedPercent: "100.0001", allocatedPercentText: "100,0001%", unallocatedPercentText: "−0,0001%", excessHours: "0.00016"
+    });
+    expect(describeSaveProblems(result, hours)).toEqual(["сумма долей 100,0001%, на <0,01 ч больше доступной ёмкости"]);
+    expect(formatSignedHours(result.plan.unallocatedHours, hours)).toBe("−<0,01 ч");
+  });
+
+  it("QA-C16: an own reserve share of 30,00001% — 100,00001%, <0,01 ч over", () => {
+    const reserve = direction("meet", "30", { kind: "reserve", memberPercents: [{ memberId: "p1", percent: "30.00001" }] });
+    const result = calculate(quarter(10, ["1"], [direction("works", "70"), reserve]));
+    // 56 + 80 × 30,00001% = 56 + 24,000008 = 80,000008 h of 80 h.
+    expect([result.plan.allocatedHours, result.plan.unallocatedHours]).toEqual(["80.000008", "-0.000008"]);
+    expect(describeAllocation(result)).toMatchObject({ allocatedPercentText: "100,00001%", unallocatedPercentText: "−0,00001%", excessHours: "0.000008" });
+    expect(describeSaveProblems(result, hours)).toEqual(["сумма долей 100,00001%, на <0,01 ч больше доступной ёмкости"]);
+  });
+
+  it("an excess beyond six places is named, not rounded to 100%", () => {
+    const result = calculate(quarter(20, ["1"], [direction("a", "50"), direction("b", "50.0000001")]));
+    expect(describeAllocation(result)).toMatchObject({ allocatedPercentText: "более 100%", unallocatedPercentText: "менее 0%", overallocated: true });
+    expect(describeSaveProblems(result, hours)).toEqual(["сумма долей более 100%, на <0,01 ч больше доступной ёмкости"]);
+  });
+
+  it("a small rest is not shown as 100% and 0 ч either", () => {
+    const result = calculate(quarter(20, ["1"], [direction("a", "50"), direction("b", "49.9999")]));
+    expect(describeAllocation(result)).toMatchObject({ allocatedPercentText: "99,9999%", unallocatedPercentText: "0,0001%", overallocated: false });
+    expect(formatSignedHours(result.plan.unallocatedHours, hours)).toBe("<0,01 ч");
+    expect(describeSaveProblems(result, hours)).toEqual([]);
+  });
+
+  it("an exact 100% stays «100%» and «0%»", () => {
+    const result = calculate(quarter(20, ["1"], [direction("a", "50"), direction("b", "50")]));
+    expect(describeAllocation(result)).toMatchObject({ allocatedPercentText: "100%", unallocatedPercentText: "0%", excessHours: "0" });
+    expect(formatSignedHours(result.plan.unallocatedHours, hours)).toBe("0 ч");
   });
 });
 

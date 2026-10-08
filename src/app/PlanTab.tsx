@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { formatDeficitHours } from "../domain/capacity/input-format";
+import { formatDeficitHours, formatSignedHours } from "../domain/capacity/input-format";
 import type { QuarterCapacityResult, QuarterDirectionCapacity, QuarterSnapshot, TaskMark } from "../domain/capacity/quarter-capacity.types";
 import { isWebLink, QUARTER_INPUT_LIMITS } from "../domain/capacity/quarter-snapshot.validation";
 import { pluralRu } from "../domain/capacity/quarter-totals";
@@ -287,7 +287,7 @@ function Overview({ planId, snapshot, result, workInputs, onOpen, onImport, impo
           </tr>;
         })}
         {allocation && <tr className="pp-muted-row"><td><b>Не распределено</b> <InfoHint info="unallocated" /><span className="pp-sub">никому не выделено</span></td>
-          <td className="project-number">{formatPercent(allocation.unallocatedPercent)} · {hours(allocation.unallocatedHours)}</td><td>—</td>
+          <td className="project-number">{allocation.unallocatedPercentText} · {formatSignedHours(allocation.unallocatedHours, hours)}</td><td>—</td>
           <td>{allocation.overallocated ? <Sign tone="over">Сумма долей больше 100%</Sign> : "—"}</td><td>—</td><td /></tr>}
       </tbody>
     </table></div>

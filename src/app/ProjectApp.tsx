@@ -10,7 +10,7 @@ import { hours, isMac, saveShortcut, Sign } from "./plan-ui";
 import { SourcesTab } from "./SourcesTab";
 import { describeCompetencyInUse, describeValidationIssue } from "./validation-text";
 import { getQuarterDates, type Quarter } from "../domain/capacity/calendar-quarter";
-import { formatDeficitHours, normalizeUserDecimal } from "../domain/capacity/input-format";
+import { formatDeficitHours, formatSignedHours, normalizeUserDecimal } from "../domain/capacity/input-format";
 import { calculateQuarterCapacity } from "../domain/capacity/quarter-capacity.calculator";
 import { getCalendarOverrides, type CalendarMode } from "../domain/capacity/project-calendar";
 import { describeQuarterSprints, type QuarterSprints } from "../domain/capacity/quarter-sprints";
@@ -348,10 +348,10 @@ function PlanTotals({ result }: { result: QuarterCapacityResult | null }) {
     </div>
     <div className="project-total">
       <span className="project-total-label">Не распределено <InfoHint info="unallocated" /></span>
-      <strong className={allocation?.overallocated ? "project-negative" : ""}>{allocation ? hours(allocation.unallocatedHours) : "—"}</strong>
+      <strong className={allocation?.overallocated ? "project-negative" : ""}>{allocation ? formatSignedHours(allocation.unallocatedHours, hours) : "—"}</strong>
       <span className="project-total-note">{!allocation ? "" : allocation.overallocated
-        ? <Sign tone="over">сумма долей {formatPercent(allocation.allocatedPercent)}</Sign>
-        : `${formatPercent(allocation.unallocatedPercent)} ёмкости`}</span>
+        ? <Sign tone="over">сумма долей {allocation.allocatedPercentText}</Sign>
+        : `${allocation.unallocatedPercentText} ёмкости`}</span>
     </div>
   </section>;
 }
