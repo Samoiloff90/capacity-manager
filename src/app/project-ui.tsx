@@ -19,12 +19,15 @@ function InfoIcon() {
   return <svg {...iconProps} width={15} height={15}><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.5v.5" /></svg>;
 }
 
-/** Icon-only delete: the word stays for screen readers and the tooltip, aria-label names the row. */
-export function DeleteButton({ label, onClick, disabled, title }: {
-  label: string; onClick: () => void; disabled?: boolean; title?: string;
+/**
+ * Icon-only delete: the word stays for screen readers and the tooltip, aria-label names the row.
+ * `blocked` keeps the button focusable and says why deleting is not possible (describedBy).
+ */
+export function DeleteButton({ label, onClick, disabled, title, blocked, describedBy }: {
+  label: string; onClick: () => void; disabled?: boolean; title?: string; blocked?: boolean; describedBy?: string;
 }) {
-  return <button type="button" className="project-icon-button danger" aria-label={label} title={title ?? "Удалить"}
-    disabled={disabled} onClick={onClick}><TrashIcon /><span className="visually-hidden">Удалить</span></button>;
+  return <button type="button" className={`project-icon-button danger${blocked ? " blocked" : ""}`} aria-label={label} title={title ?? "Удалить"}
+    disabled={disabled} aria-disabled={blocked || undefined} aria-describedby={describedBy} onClick={onClick}><TrashIcon /><span className="visually-hidden">Удалить</span></button>;
 }
 
 type PopoverPosition = { top: number; left: number };

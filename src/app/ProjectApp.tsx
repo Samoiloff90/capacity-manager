@@ -8,7 +8,7 @@ import { PlanTab } from "./PlanTab";
 import { DeleteButton, DIALOG_ROOT_ID, InfoHint, PencilIcon, restoreFocus } from "./project-ui";
 import { hours, isMac, saveShortcut, Sign } from "./plan-ui";
 import { SourcesTab } from "./SourcesTab";
-import { describeValidationIssue } from "./validation-text";
+import { describeCompetencyInUse, describeValidationIssue } from "./validation-text";
 import { getQuarterDates, type Quarter } from "../domain/capacity/calendar-quarter";
 import { formatDeficitHours, normalizeUserDecimal } from "../domain/capacity/input-format";
 import { calculateQuarterCapacity } from "../domain/capacity/quarter-capacity.calculator";
@@ -359,6 +359,8 @@ function SectionHeading({ title, note, id, children }: { title: string; note: st
 
 function TeamEditor({ snapshot, update, result }: EditorProps) {
   const [removeId, setRemoveId] = useState<string | null>(null);
+  // A competency whose delete button was pressed while people still have it: the reason shows.
+  const [kept, setKept] = useState<string | null>(null);
   const removeMember = snapshot.members.find((member) => member.id === removeId);
   const setMember = (id: string, patch: Partial<QuarterSnapshot["members"][number]>) => update((current) => ({
     ...current, members: current.members.map((member) => member.id === id ? { ...member, ...patch } : member)
@@ -409,15 +411,19 @@ function TeamEditor({ snapshot, update, result }: EditorProps) {
       {!snapshot.members.length && <tr><td colSpan={7} className="project-table-empty">Пока нет сотрудников. Добавьте первого участника команды.</td></tr>}
     </tbody></table></div>
     <div className="project-two-columns project-competencies">
-      <section><h3>Компетенции команды</h3><p className="project-muted">Названия можно изменить. Удалить можно только компетенцию без сотрудников.</p>
+      <section><h3>Компетенции команды <InfoHint info="competencyList" /></h3>
         <div className="data-table-wrap"><table className="project-table"><thead><tr><th>Название</th><th className="project-row-action"><span className="visually-hidden">Действия</span></th></tr></thead><tbody>
           {snapshot.competencies.map((competency, index) => {
-            const used = snapshot.members.some((member) => member.competencyId === competency.id);
+            const people = snapshot.members.filter((member) => member.competencyId === competency.id).length;
+            const reason = people ? describeCompetencyInUse(people) : "";
+            const reasonId = `competency-kept-${competency.id}`;
             return <tr key={competency.id}><td><input value={competency.name} maxLength={1000} aria-label={`Название компетенции ${index + 1}`}
-              onChange={(event) => update((current) => ({ ...current, competencies: current.competencies.map((item) => item.id === competency.id ? { ...item, name: event.target.value } : item) }))} /></td>
-              <td className="project-row-action"><DeleteButton label={`Удалить компетенцию ${competency.name.trim() || index + 1}`} disabled={used}
-                title={used ? "Компетенция используется сотрудниками" : "Удалить компетенцию"}
-                onClick={() => update((current) => ({ ...current, competencies: current.competencies.filter((item) => item.id !== competency.id) }))} /></td></tr>;
+              onChange={(event) => update((current) => ({ ...current, competencies: current.competencies.map((item) => item.id === competency.id ? { ...item, name: event.target.value } : item) }))} />
+              {reason && <span id={reasonId} className={kept === competency.id ? "project-row-reason" : "visually-hidden"} role={kept === competency.id ? "status" : undefined}>{reason}</span>}</td>
+              <td className="project-row-action"><DeleteButton label={`Удалить компетенцию ${competency.name.trim() || index + 1}`} blocked={people > 0}
+                title={reason || "Удалить компетенцию"} describedBy={reason ? reasonId : undefined}
+                onClick={() => people ? setKept(competency.id)
+                  : update((current) => ({ ...current, competencies: current.competencies.filter((item) => item.id !== competency.id) }))} /></td></tr>;
           })}
         </tbody></table></div>
         <div className="project-table-footer"><button className="secondary" type="button" onClick={() => update((current) => ({ ...current,

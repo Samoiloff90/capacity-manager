@@ -40,6 +40,10 @@
 .project-app .project-icon-button.danger { background: transparent; border-color: transparent; color: #a62929; }
 .project-app .project-icon-button:not(:disabled):hover { background: #eef3fb; filter: none; }
 .project-app .project-icon-button.danger:not(:disabled):hover { background: #fff0f0; }
+/* A delete that is not possible now stays focusable; its reason shows next to the row (DEC-050). */
+.project-app .project-icon-button.danger.blocked { color: #98a2b3; cursor: not-allowed; }
+.project-app .project-icon-button.danger.blocked:hover { background: transparent; }
+.project-row-reason { color: #805815; display: block; font-size: 13px; margin-top: 4px; }
 .project-app .project-link-button { background: transparent; border: 0; color: #1d5fd1; min-height: 0; padding: 0; text-decoration: underline; }
 .project-chip { border-radius: 5px; display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 7px; white-space: nowrap; }
 .project-chip.preliminary { background: #fff8e7; color: #805815; }
