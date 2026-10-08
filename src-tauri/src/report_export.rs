@@ -35,6 +35,9 @@ const DIRECTORY: &str = "Выберите файл, а не папку.";
 const UNKNOWN_PATH: &str = "Не удалось определить путь для сохранения.";
 const DIALOG_UNAVAILABLE: &str = "Окно сохранения недоступно.";
 const LOCKED: &str = "Не удалось сохранить отчёт: файл открыт в другой программе, например в Excel. Закройте его и повторите.";
+const NO_SAFE_REPLACE: &str =
+    "Не удалось сохранить отчёт: нет доступа к папке, чтобы безопасно заменить существующий файл. \
+Прежний файл не изменён. Сохраните отчёт под другим именем или в другую папку.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -118,7 +121,7 @@ where
     })
 }
 
-/// Removes an unfinished temporary file unless the rename succeeded.
+/// Removes an unfinished file this module created, unless the write and rename succeeded.
 struct TempFile {
     path: PathBuf,
     armed: bool,
@@ -133,24 +136,28 @@ impl Drop for TempFile {
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_atomically_with(path, bytes, |temp_path| {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temp_path)
+    })
+}
+
+/// `open_temp` creates the temporary file next to the target; tests replace it to refuse access.
+fn write_atomically_with(
+    path: &Path,
+    bytes: &[u8],
+    open_temp: impl FnOnce(&Path) -> io::Result<File>,
+) -> Result<(), String> {
     let parent = path.parent().ok_or_else(|| UNKNOWN_PATH.to_string())?;
     let temp_path = parent.join(format!("{TEMP_PREFIX}{}.tmp", uuid::Uuid::new_v4()));
-    let file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-    {
+    let file = match open_temp(&temp_path) {
         Ok(file) => file,
-        // A sandboxed save panel (macOS TCC) may grant the chosen file but not
-        // its folder. Only this failure falls back to an in-place write.
+        // A save panel (macOS TCC) may grant the chosen file but not its folder.
+        // Then only a new file is written in place (R-006).
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            let target = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path)
-                .map_err(|error| io_failure(&error))?;
-            return write_and_sync(target, bytes).map_err(|error| io_failure(&error));
+            return write_new_in_place(path, bytes);
         }
         Err(error) => return Err(io_failure(&error)),
     };
@@ -168,6 +175,26 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
         }
     })?;
     temp.armed = false;
+    Ok(())
+}
+
+/// Without a temporary file an existing report is never truncated: a failed write
+/// would leave neither the old report nor the new one. The user saves under
+/// another name instead; a new file that fails half-way is removed.
+fn write_new_in_place(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let target = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(NO_SAFE_REPLACE.into());
+        }
+        Err(error) => return Err(io_failure(&error)),
+    };
+    let mut created = TempFile {
+        path: path.to_path_buf(),
+        armed: true,
+    };
+    write_and_sync(target, bytes).map_err(|error| io_failure(&error))?;
+    created.armed = false;
     Ok(())
 }
 
@@ -473,6 +500,34 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), replacement);
         assert!(leftover_temps(&folder).is_empty());
         assert_eq!(fs::read_dir(&folder).unwrap().count(), 1);
+    }
+
+    /// R-006: no temporary file next to the target (macOS TCC grants only the chosen file).
+    fn refused(_: &Path) -> io::Result<File> {
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    }
+
+    #[test]
+    fn refused_temporary_file_never_truncates_an_existing_report() {
+        let dir = TempDir::new();
+        let target = dir.0.join("Отчёт.xlsx");
+        fs::write(&target, b"old workbook").unwrap();
+        assert_eq!(
+            write_atomically_with(&target, WORKBOOK, refused),
+            Err(NO_SAFE_REPLACE.into())
+        );
+        // The earlier report is intact and nothing else was written.
+        assert_eq!(fs::read(&target).unwrap(), b"old workbook");
+        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn refused_temporary_file_still_writes_a_new_report() {
+        let dir = TempDir::new();
+        let target = dir.0.join("Новый отчёт.xlsx");
+        assert_eq!(write_atomically_with(&target, WORKBOOK, refused), Ok(()));
+        assert_eq!(fs::read(&target).unwrap(), WORKBOOK);
+        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
     }
 
     #[test]
