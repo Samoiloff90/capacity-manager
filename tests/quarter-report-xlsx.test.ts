@@ -12,6 +12,7 @@ import type { QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.ty
 import { buildQuarterReport } from "../src/export/quarter-report";
 import { renderQuarterReportXlsx } from "../src/export/xlsx";
 import { calculate, readmeQuarter } from "./fixtures/readme-quarter";
+import { readWorkbook } from "./fixtures/xlsx-cells";
 
 const exportedAt = new Date(2026, 9, 5, 9, 7);
 const decoder = new TextDecoder();
@@ -50,10 +51,10 @@ describe("XLSX rendering of the quarter report", () => {
   it("writes six named sheets with numbers, dates and a frozen header", async () => {
     const files = await workbook();
     expect([...files["xl/workbook.xml"].matchAll(/<sheet [^>]*name="([^"]+)"/g)].map((match) => match[1]))
-      .toEqual(["Сводка", "Люди", "Компетенции", "Направления", "Задачи", "Отсутствия"]);
+      .toEqual(["Сводка", "Люди", "Компетенции", "Источники", "Работы", "Отсутствия"]);
     expect(sheetXml(files, 2)).toContain("<v>252</v>");
     expect(sheetXml(files, 4)).toContain("<v>50.4</v>");
-    expect(sheetXml(files, 4)).toContain("<v>-4.6</v>");
+    expect(sheetXml(files, 4)).toContain("<v>4.6</v>");
     // 2026-10-01 and 2026-10-02 as Excel serial dates, independent of the time zone.
     expect(sheetXml(files, 6)).toContain("<v>46296</v>");
     expect(sheetXml(files, 6)).toContain("<v>46297</v>");
@@ -72,9 +73,9 @@ describe("XLSX rendering of the quarter report", () => {
     for (const colour of ["FFE8EEF5", "FFFDECEC", "FF9B1C1C", "FF8A5A00"]) expect(styles).toContain(colour);
     expect(styles).toContain('formatCode="#,##0.00"');
     expect(styles).toContain('formatCode="dd.mm.yyyy"');
-    // Hours use the custom format; percent (B2 of «Направления») and rate (C2 of «Люди») stay General.
-    expect(cellStyle(files, 4, "C2")).toMatch(/numFmtId="1\d\d"/);
-    expect(cellStyle(files, 4, "B2")).not.toMatch(/numFmtId="[1-9]/);
+    // Hours use the custom format; percent (C2 of «Источники») and rate (C2 of «Люди») stay General.
+    expect(cellStyle(files, 4, "E2")).toMatch(/numFmtId="1\d\d"/);
+    expect(cellStyle(files, 4, "C2")).not.toMatch(/numFmtId="[1-9]/);
     expect(cellStyle(files, 2, "C2")).not.toMatch(/numFmtId="[1-9]/);
   });
 
@@ -128,8 +129,55 @@ describe("XLSX rendering of the quarter report", () => {
       "<t>12345678901234,56 ч</t>", "<t>33,3333333333333333</t>", "<t>66,6666666666666667</t>"
     ]));
     expect(sheetXml(files, 5)).not.toContain("12345678901234.56");
-    // The allocation total is exactly 100 and stays a number.
-    expect(sheetXml(files, 1)).toContain("<v>100</v>");
+    // The shares add up to exactly 100%: nothing is shown as over or under.
+    expect(strings).toEqual(expect.arrayContaining(["<t>100%</t>", "<t>0%</t>"]));
+  });
+
+  it("the written file holds the report of the quarter planner (B-1): read back from its bytes", async () => {
+    const snapshot = readmeQuarter();
+    const book = readWorkbook(await renderQuarterReportXlsx(buildQuarterReport({ teamName: "Команда А", snapshot, result: calculate(snapshot), exportedAt })));
+    expect(Object.keys(book)).toEqual(["Сводка", "Люди", "Компетенции", "Источники", "Работы", "Отсутствия"]);
+    // 252 h; «Продукт» 20% = 50,4 h, 30 + 25 = 55 h in the plan, 4,6 h over; «Встречи и прочее» 80% = 201,6 h free.
+    const summary = new Map(book["Сводка"].slice(1).map((row) => [row[0], row[1]]));
+    expect(Object.fromEntries([...summary].filter(([label]) => [
+      "Доступно команде, ч", "Резерв, ч", "Занято работами в плане, ч", "Работ в плане", "Работ в плане без оценки", "Остатки квот, ч",
+      "Перебор квот, ч", "Источников с перебором", "Выделено источникам, ч", "Выделено источникам, % ёмкости", "Не распределено, ч",
+      "Не распределено, % ёмкости", "Предупреждение"
+    ].includes(String(label))))).toEqual({
+      "Доступно команде, ч": 252, "Резерв, ч": "Не задан", "Занято работами в плане, ч": 55, "Работ в плане": 2, "Работ в плане без оценки": 0,
+      "Остатки квот, ч": 201.6, "Перебор квот, ч": 4.6, "Источников с перебором": 1, "Выделено источникам, ч": 252,
+      "Выделено источникам, % ёмкости": "100%", "Не распределено, ч": 0, "Не распределено, % ёмкости": "0%",
+      "Предупреждение": "Перебор квоты — «Продукт» 4,60 ч."
+    });
+    expect(book["Источники"]).toEqual([
+      ["Источник", "Вид", "Доля, %", "Доля ёмкости фактически, %", "Бюджет, ч", "Занято в плане, ч", "В плане без оценки",
+        "Остаток, ч", "Перебор, ч", "На рассмотрении", "Не в этом квартале", "Примечание"],
+      ["Продукт", "Работы", 20, 20, 50.4, 55, 0, 0, 4.6, 0, 0, "Перебор 4,60 ч."],
+      ["Встречи и прочее", "Работы", 80, 80, 201.6, 0, 0, 201.6, 0, 0, 0, "Остаток 201,60 ч."],
+      ["Не распределено", null, null, "0%", 0, null, null, null, null, null, null, "Никому не выделено."]
+    ]);
+    expect(book["Работы"]).toEqual([
+      ["Источник", "Работа", "Решение по плану", "Оценка, ч", "Занимает бюджет"],
+      ["Продукт", "Задача 30", "В плане квартала", 30, "да"],
+      ["Продукт", "Задача 25", "В плане квартала", 25, "да"]
+    ]);
+  });
+
+  it("an overrun or an excess below a hundredth is written as «<0,01 ч», never as 0,00 (R-002)", async () => {
+    const snapshot = readmeQuarter({
+      directions: [
+        { id: "z-product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] },
+        { id: "a-meetings", name: "Встречи и прочее", percent: "80.0001", kind: "work" as const, memberPercents: [] }
+      ],
+      tasks: [{ id: "t1", name: "Почти весь бюджет", directionId: "z-product", estimateHours: "50.401", mark: "plan" as const, link: null, comment: null }]
+    });
+    const book = readWorkbook(await renderQuarterReportXlsx(buildQuarterReport({ teamName: "Команда А", snapshot, result: calculate(snapshot), exportedAt })));
+    const summary = new Map(book["Сводка"].slice(1).map((row) => [row[0], row[1]]));
+    // 252 × 80,0001% + 50,4 = 252,000252 h given; 50,401 − 50,4 = 0,001 h over «Продукт».
+    expect([summary.get("Не распределено, ч"), summary.get("Выделено источникам, % ёмкости"), summary.get("Перебор квот, ч")])
+      .toEqual(["−<0,01 ч", "100,0001%", "<0,01 ч"]);
+    expect(book["Источники"][1].slice(8)).toEqual(["<0,01 ч", 0, 0, "Перебор <0,01 ч."]);
+    expect(book["Источники"][3].slice(3, 5)).toEqual(["−0,0001%", "−<0,01 ч"]);
   });
 
   it("runs the worker-free zip shim in tests and in the production Vite config", async () => {

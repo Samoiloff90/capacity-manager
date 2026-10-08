@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
 import type { QuarterSnapshot } from "../src/domain/capacity/quarter-capacity.types";
 import {
-  buildQuarterReport, formatTimestamp, reportFileBaseName, ROUNDING_NOTE,
+  buildQuarterReport, formatTimestamp, reportFileBaseName, ROUNDING_NOTE, SAVED_STATE_NOTE,
   type QuarterReport, type ReportCell, type ReportRow
 } from "../src/export/quarter-report";
 import { calculate, readmeQuarter } from "./fixtures/readme-quarter";
@@ -34,14 +34,15 @@ function summary(result: QuarterReport): Map<string, string | number | null> {
 describe("quarter report model: README scenario", () => {
   const result = report();
 
-  it("has the agreed sheets and columns", () => {
-    expect(result.sheets.map((item) => item.name)).toEqual(["Сводка", "Люди", "Компетенции", "Направления", "Задачи", "Отсутствия"]);
+  it("has the sheets of the quarter planner and their columns (B-1)", () => {
+    expect(result.sheets.map((item) => item.name)).toEqual(["Сводка", "Люди", "Компетенции", "Источники", "Работы", "Отсутствия"]);
     expect(result.sheets.map((item) => item.columns.map((column) => column.title))).toEqual([
       ["Показатель", "Значение"],
       ["Сотрудник", "Компетенция", "Ставка", "Рабочих дней", "Дней отсутствия", "Доступно дней", "Доступно часов"],
       ["Компетенция", "Сотрудников", "Доступно часов"],
-      ["Направление", "Доля, %", "Бюджет, ч", "Потребность, ч", "Задач без оценки", "Остаток, ч", "Статус", "Примечание"],
-      ["Задача", "Направление", "Оценка, ч"],
+      ["Источник", "Вид", "Доля, %", "Доля ёмкости фактически, %", "Бюджет, ч", "Занято в плане, ч", "В плане без оценки",
+        "Остаток, ч", "Перебор, ч", "На рассмотрении", "Не в этом квартале", "Примечание"],
+      ["Источник", "Работа", "Решение по плану", "Оценка, ч", "Занимает бюджет"],
       ["Сотрудник", "С", "По"]
     ]);
     for (const item of result.sheets) {
@@ -49,23 +50,36 @@ describe("quarter report model: README scenario", () => {
     }
   });
 
-  it("summarises a ready plan with engine totals", () => {
+  it("summarises the quarter as the screen does: capacity, reserve, plan, rests, overrun, not allocated", () => {
+    // 252 h; «Продукт» 20% = 50,4 h with 30 + 25 = 55 h in the plan: over by 4,6 h; «Встречи и прочее» 201,6 h free.
     expect([...summary(result)]).toEqual([
       ["Команда", "Команда А"],
       ["Период", "4 квартал 2026 года"],
       ["Дата выгрузки", "05.10.2026 09:07"],
-      ["Статус плана", "Готовый"],
+      ["Состояние квартала", SAVED_STATE_NOTE],
       ["Календарь", "Производственный календарь РФ"],
       ["Ручных поправок календаря", 1],
       ["Рабочих дней", 65],
       ["Сотрудников", 1],
-      ["Доступно часов команды", "252"],
-      ["Сумма долей, %", "100"],
-      ["Потребность задач, ч", "55"],
-      ["Задач без оценки", 0],
+      ["Доступно команде, ч", "252"],
+      ["Резерв, ч", "Не задан"],
+      ["Занято работами в плане, ч", "55"],
+      ["Работ в плане", 2],
+      ["Работ в плане без оценки", 0],
+      ["Остатки квот, ч", "201.6"],
+      ["Перебор квот, ч", "4.6"],
+      ["Источников с перебором", 1],
+      ["Выделено источникам, ч", "252"],
+      ["Выделено источникам, % ёмкости", "100%"],
+      ["Не распределено, ч", "0"],
+      ["Не распределено, % ёмкости", "0%"],
+      ["Источников без доли", 0],
+      ["Предупреждение", "Перебор квоты — «Продукт» 4,60 ч."],
       ["Примечание", ROUNDING_NOTE]
     ]);
-    expect(sheet(result, "Сводка").every((row) => row.tone === undefined)).toBe(true);
+    const tones = new Map(sheet(result, "Сводка").map((row) => [String(value(row.cells[0])), row.tone]));
+    expect([tones.get("Перебор квот, ч"), tones.get("Источников с перебором"), tones.get("Предупреждение")]).toEqual(["deficit", "deficit", "deficit"]);
+    expect(tones.get("Занято работами в плане, ч")).toBeUndefined();
   });
 
   it("lists people with a total row taken from the engine", () => {
@@ -77,16 +91,20 @@ describe("quarter report model: README scenario", () => {
     expect(rows(result, "Компетенции")).toEqual([["Разработка", 1, "252"]]);
   });
 
-  it("shows direction balances with the same texts as the screen, in snapshot order", () => {
-    expect(rows(result, "Направления")).toEqual([
-      ["Продукт", "20", "50.4", "55", 0, "-4.6", "Дефицит 4,60 ч", null],
-      ["Встречи и прочее", "80", "201.6", "0", 0, "201.6", "Остаток 201,60 ч", null]
+  it("shows each source with its kind, share, budget, use and rest, in snapshot order", () => {
+    expect(rows(result, "Источники")).toEqual([
+      ["Продукт", "Работы", "20", "20", "50.4", "55", 0, "0", "4.6", 0, 0, "Перебор 4,60 ч."],
+      ["Встречи и прочее", "Работы", "80", "80", "201.6", "0", 0, "201.6", "0", 0, 0, "Остаток 201,60 ч."],
+      ["Не распределено", null, null, "0%", "0", null, null, null, null, null, null, "Никому не выделено."]
     ]);
-    expect(sheet(result, "Направления").map((row) => row.tone)).toEqual(["deficit", undefined]);
+    expect(sheet(result, "Источники").map((row) => row.tone)).toEqual(["deficit", undefined, undefined]);
   });
 
-  it("keeps tasks and absences in snapshot order", () => {
-    expect(rows(result, "Задачи")).toEqual([["Задача 30", "Продукт", "30"], ["Задача 25", "Продукт", "25"]]);
+  it("lists every work with its decision; absences in snapshot order", () => {
+    expect(rows(result, "Работы")).toEqual([
+      ["Продукт", "Задача 30", "В плане квартала", "30", "да"],
+      ["Продукт", "Задача 25", "В плане квартала", "25", "да"]
+    ]);
     expect(rows(result, "Отсутствия")).toEqual([["Тестовый сотрудник", "2026-10-01", "2026-10-02"]]);
   });
 
@@ -95,50 +113,116 @@ describe("quarter report model: README scenario", () => {
   });
 });
 
-describe("quarter report model: preliminary plans and edge cases", () => {
-  it("marks a missing estimate as not estimated and the plan as preliminary", () => {
-    const snapshot = readmeQuarter();
+describe("quarter report model: the rules of the quarter planner", () => {
+  const work = (id: string, name: string, estimateHours: string | null, mark: "plan" | "candidate" | "out", directionId = "z-product") =>
+    ({ id, name, directionId, estimateHours, mark, link: null, comment: null });
+  const warnings = (result: QuarterReport) => sheet(result, "Сводка").filter((row) => value(row.cells[0]) === "Предупреждение");
+
+  it("works on review or outside the quarter are listed with their decision and take no budget", () => {
     const result = report(readmeQuarter({ tasks: [
-      ...snapshot.tasks, { id: "t3", name: "Без оценки", directionId: "z-product", estimateHours: null, mark: "plan" as const, link: null, comment: null }
+      work("t1", "Вне квартала", "100", "out"), work("t2", "Кандидат", "40", "candidate"), work("t3", "В плане", "20", "plan"),
+      work("t4", "Кандидат без оценки", null, "candidate")
     ] }));
+    expect(rows(result, "Работы")).toEqual([
+      ["Продукт", "В плане", "В плане квартала", "20", "да"],
+      ["Продукт", "Кандидат", "На рассмотрении", "40", "нет"],
+      ["Продукт", "Кандидат без оценки", "На рассмотрении", "Без оценки", "нет"],
+      ["Продукт", "Вне квартала", "Не в этом квартале", "100", "нет"]
+    ]);
+    // Only the 20 h in the plan are taken from 50,4 h: 30,4 h left.
+    expect(rows(result, "Источники")[0]).toEqual(["Продукт", "Работы", "20", "20", "50.4", "20", 0, "30.4", "0", 2, 1, "Остаток 30,40 ч."]);
+    expect(summary(result).get("Занято работами в плане, ч")).toBe("20");
+    expect(summary(result).get("Работ в плане")).toBe(1);
+  });
+
+  it("a work in the plan without an estimate: «не менее», «не более» and a warning, not 0", () => {
+    const result = report(readmeQuarter({ tasks: [...readmeQuarter().tasks, work("t3", "Без оценки", null, "plan")] }));
     const values = summary(result);
-    expect(values.get("Статус плана")).toBe("Предварительный");
-    expect(values.get("Причины")).toBe("Задач без оценки: 1.");
-    expect(values.get("Известная потребность задач, ч")).toBe("55");
-    expect(values.has("Потребность задач, ч")).toBe(false);
-    const statusRows = sheet(result, "Сводка").filter((row) =>
-      ["Статус плана", "Причины", "Известная потребность задач, ч"].includes(String(value(row.cells[0]))));
-    expect(statusRows.map((row) => row.tone)).toEqual(["preliminary", "preliminary", "preliminary"]);
-    expect(rows(result, "Задачи")[2]).toEqual(["Без оценки", "Продукт", "Не оценена"]);
-    expect(sheet(result, "Задачи")[2].tone).toBe("preliminary");
-    const [product] = rows(result, "Направления");
-    expect(product.slice(4, 8)).toEqual([1, "-4.6", "Дефицит не менее 4,60 ч", "Задач без оценки: 1. Потребность неполная."]);
-    expect(sheet(result, "Направления")[0].tone).toBe("deficit");
+    expect(values.get("Занято работами в плане, не менее, ч")).toBe("55");
+    expect(values.has("Занято работами в плане, ч")).toBe(false);
+    expect(values.get("Работ в плане без оценки")).toBe(1);
+    expect(values.get("Остатки квот, не более, ч")).toBe("201.6");
+    expect(warnings(result).map((row) => [value(row.cells[1]), row.tone])).toEqual([
+      ["Перебор квоты — «Продукт» не менее 4,60 ч.", "deficit"],
+      ["В плане 1 работа без оценки: занятость — не менее указанной, остатки квот — не более.", "preliminary"]
+    ]);
+    expect(rows(result, "Работы")[2]).toEqual(["Продукт", "Без оценки", "В плане квартала", "Без оценки", "да, оценка неизвестна"]);
+    expect(sheet(result, "Работы")[2].tone).toBe("preliminary");
+    expect(rows(result, "Источники")[0].slice(6)).toEqual([1, "0", "4.6", 0, 0, "Перебор не менее 4,60 ч. В плане без оценки: 1 работа."]);
   });
 
-  it("keeps a sub-cent deficit visible", () => {
-    const result = report(readmeQuarter({ tasks: [
-      { id: "t1", name: "Почти весь бюджет", directionId: "z-product", estimateHours: "50.401", mark: "plan" as const, link: null, comment: null }
-    ] }));
-    const [product] = rows(result, "Направления");
-    expect(product[5]).toBe("-0.001");
-    expect(product[6]).toBe("Дефицит <0,01 ч");
-    expect(sheet(result, "Направления")[0].tone).toBe("deficit");
-  });
-
-  it("explains an allocation that is not 100%", () => {
+  it("a sum of shares under 100% is not a problem: the rest is «Не распределено»", () => {
     const result = report(readmeQuarter({ directions: [
-      { id: "z-product", name: "Продукт", percent: "20", kind: "work" as const, memberPercents: [] }, { id: "a-meetings", name: "Встречи и прочее", percent: "70", kind: "work" as const, memberPercents: [] }
+      { id: "z-product", name: "Продукт", percent: "20", kind: "work", memberPercents: [] },
+      { id: "a-meetings", name: "Встречи и прочее", percent: "70", kind: "work", memberPercents: [] }
+    ], tasks: [] }));
+    const values = summary(result);
+    expect([values.get("Выделено источникам, % ёмкости"), values.get("Не распределено, ч"), values.get("Не распределено, % ёмкости")]).toEqual(["90%", "25.2", "10%"]);
+    expect(warnings(result)).toEqual([]);
+    expect(sheet(result, "Сводка").every((row) => row.tone === undefined)).toBe(true);
+    expect([...values.values()].join(" ")).not.toMatch(/Предварительный|вместо 100%/);
+  });
+
+  it("an excess of shares and an overrun below a hundredth stay visible (R-002)", () => {
+    const result = report(readmeQuarter({ directions: [
+      { id: "z-product", name: "Продукт", percent: "20", kind: "work", memberPercents: [] },
+      { id: "a-meetings", name: "Встречи и прочее", percent: "80.0001", kind: "work", memberPercents: [] }
+    ], tasks: [work("t1", "Почти весь бюджет", "50.401", "plan")] }));
+    const values = summary(result);
+    // 252 × 0,000001 = 0,000252 h over the capacity; 50,401 − 50,4 = 0,001 h over the quota.
+    expect([values.get("Не распределено, ч"), values.get("Выделено источникам, % ёмкости"), values.get("Перебор квот, ч")]).toEqual(["-0.000252", "100,0001%", "0.001"]);
+    const cells = new Map(sheet(result, "Сводка").map((row) => [String(value(row.cells[0])), row.cells[1]]));
+    expect(cells.get("Не распределено, ч")).toEqual({ kind: "hours", value: "-0.000252", keepNonzero: true });
+    expect(cells.get("Перебор квот, ч")).toEqual({ kind: "hours", value: "0.001", keepNonzero: true });
+    expect(warnings(result).map((row) => value(row.cells[1]))).toEqual([
+      "Сумма долей 100,0001%, на <0,01 ч больше доступной ёмкости.", "Перебор квоты — «Продукт» <0,01 ч."
+    ]);
+    expect(rows(result, "Источники")[0][11]).toBe("Перебор <0,01 ч.");
+  });
+
+  it("a reserve by person: the share and its owner per person, and how it is counted (DEC-038)", () => {
+    const snapshot = readmeQuarter({
+      members: [
+        { id: "z-member", name: "Тестовый сотрудник", competencyId: "z-dev", fte: "0.5" },
+        { id: "b-member", name: "Второй сотрудник", competencyId: "z-dev", fte: "1" }
+      ],
+      directions: [
+        { id: "r-meet", name: "Встречи", percent: "30", kind: "reserve", memberPercents: [{ memberId: "b-member", percent: "40" }] },
+        { id: "z-product", name: "Продукт", percent: "20", kind: "work", memberPercents: [] }
+      ],
+      tasks: []
+    });
+    const result = report(snapshot);
+    // 252 h × 30% = 75,6 h and 520 h × 40% = 208 h: 283,6 h of reserve, 36,74% of 772 h.
+    expect(result.sheets[1].columns.slice(7).map((column) => column.title)).toEqual(["«Встречи»: доля, %", "«Встречи»: чья доля", "«Встречи»: резерв, ч"]);
+    expect(rows(result, "Люди")).toEqual([
+      ["Тестовый сотрудник", "Разработка", "0.5", 65, 2, 63, "252", "30", "общая", "75.6"],
+      ["Второй сотрудник", "Разработка", "1", 65, 0, 65, "520", "40", "своя", "208"],
+      ["Итого", null, null, null, null, 128, "772", null, null, "283.6"]
+    ]);
+    const rule = "Резерв без работ: 30% доступных часов каждого сотрудника; своя доля — у 1 сотрудника. По людям — лист «Люди».";
+    expect(rows(result, "Источники")[0]).toEqual(["Встречи", "Резерв", "30", "36.74", "283.6", null, null, null, null, null, null, rule]);
+    const values = summary(result);
+    expect(values.get("Резерв, ч")).toBe("283.6");
+    expect(values.get("Как считается резерв «Встречи»")).toBe(rule);
+  });
+
+  it("a source without a share: no budget, works in its plan are named", () => {
+    const result = report(readmeQuarter({ directions: [
+      { id: "z-product", name: "Продукт", percent: null, kind: "work", memberPercents: [] },
+      { id: "a-meetings", name: "Встречи и прочее", percent: "80", kind: "work", memberPercents: [] }
     ] }));
-    expect(summary(result).get("Причины")).toBe("Сумма долей направлений 90% вместо 100%.");
-    expect(sheet(result, "Направления").map((row) => row.tone)).toEqual(["deficit", "preliminary"]);
-    expect(rows(result, "Направления")[1][6]).toBe("Предварительный остаток 176,40 ч");
+    expect(rows(result, "Источники")[0]).toEqual(["Продукт", "Работы", "не задана", null, null, "55", 0, null, null, 0, 0,
+      "Доля не задана: работы в плане не сравниваются с бюджетом."]);
+    expect(summary(result).get("Источников без доли")).toBe(1);
+    expect(warnings(result).map((row) => value(row.cells[1])))
+      .toEqual(["Доля не задана: «Продукт» — работы в плане не сравниваются с бюджетом."]);
   });
 
   it("handles an empty team without NaN", () => {
     const result = report(readmeQuarter({ members: [], absences: [], directions: [], tasks: [] }));
-    expect(summary(result).get("Причины")).toBe("Направления не заданы.");
     expect(rows(result, "Люди")).toEqual([["Итого", null, null, null, null, 0, "0"]]);
+    expect(rows(result, "Источники")).toEqual([["Не распределено", null, null, "100%", "0", null, null, null, null, null, null, "Никому не выделено."]]);
     for (const item of result.sheets) {
       for (const row of item.rows) {
         for (const cell of row.cells) {

@@ -12,7 +12,8 @@ import type { QuarterCapacityResult, QuarterSnapshot } from "../src/domain/capac
 import { QUARTER_PAYLOAD_VERSION, readStoredQuarterSnapshot, upgradeQuarterSnapshotV1 } from "../src/domain/capacity/quarter-snapshot-format";
 import { isWebLink, validateQuarterSnapshot } from "../src/domain/capacity/quarter-snapshot.validation";
 import { describeQuarterTotals } from "../src/domain/capacity/quarter-totals";
-import { buildQuarterReport } from "../src/export/quarter-report";
+import { decimalToString, parseDecimal, subtractDecimal } from "../src/domain/capacity/decimal-exact";
+import { buildQuarterReport, type QuarterReport, type ReportCell } from "../src/export/quarter-report";
 
 function read(version: number, payload: unknown): QuarterSnapshot {
   const result = readStoredQuarterSnapshot(version, payload);
@@ -63,7 +64,32 @@ describe("quarters saved by 0.3.0 keep their numbers (DEC-044)", () => {
     expect(result.directions.map((direction) => describeDirectionBalance(direction))).toEqual(item.balances);
     expect(describeQuarterPlanStatus(result)).toEqual(item.status);
     if (item.report) {
-      expect(buildQuarterReport({ teamName: "Тестовая команда", snapshot, result, exportedAt: new Date(golden.exportedAt) })).toEqual(item.report);
+      // The layout of 0.3.0 gave way to the report of the quarter planner (B-1, DEC-053); its numbers stay those 0.3.0 wrote.
+      const recorded = item.report as QuarterReport;
+      const report = buildQuarterReport({ teamName: "Тестовая команда", snapshot, result, exportedAt: new Date(golden.exportedAt) });
+      const rowsOf = (from: QuarterReport, name: string) => from.sheets.find((sheet) => sheet.name === name)!.rows;
+      for (const name of ["Люди", "Компетенции", "Отсутствия"]) expect(rowsOf(report, name)).toEqual(rowsOf(recorded, name));
+      const sources = rowsOf(report, "Источники").slice(0, -1);
+      const directions = rowsOf(recorded, "Направления");
+      // Name, share, budget, demand and works without an estimate, in the same order.
+      expect(sources.map((row) => [row.cells[0], row.cells[2], row.cells[4], row.cells[5], row.cells[6]]))
+        .toEqual(directions.map((row) => [row.cells[0], row.cells[1], row.cells[2], row.cells[3], row.cells[4]]));
+      // The signed rest of 0.3.0 is now a rest and an overrun.
+      const hoursOf = (cell: ReportCell) => cell.kind === "hours" ? parseDecimal(cell.value) : null;
+      expect(sources.map((row) => decimalToString(subtractDecimal(hoursOf(row.cells[7])!, hoursOf(row.cells[8])!))))
+        .toEqual(directions.map((row) => (row.cells[5] as { value: string }).value));
+      // Every work of 0.3.0 is in the plan, with its source and estimate; «Не оценена» is now «Без оценки».
+      const estimateOf = (cell: ReportCell) => cell.kind === "hours" ? cell.value : null;
+      const works = rowsOf(report, "Работы").map((row) => [row.cells[1], row.cells[0], estimateOf(row.cells[3]), row.cells[2]]);
+      const tasks = rowsOf(recorded, "Задачи").map((row) => [row.cells[0], row.cells[1], estimateOf(row.cells[2]), { kind: "text", value: "В плане квартала" }]);
+      const byName = (left: unknown[], right: unknown[]) => JSON.stringify(left).localeCompare(JSON.stringify(right));
+      expect(works.sort(byName)).toEqual(tasks.sort(byName));
+      const summaryOf = (from: QuarterReport) => new Map(rowsOf(from, "Сводка").map((row) => [(row.cells[0] as { value: string }).value, row.cells[1]]));
+      const [now, then] = [summaryOf(report), summaryOf(recorded)];
+      expect(now.get("Доступно команде, ч")).toEqual(then.get("Доступно часов команды"));
+      expect(now.get("Работ в плане без оценки")).toEqual(then.get("Задач без оценки"));
+      expect(now.get("Занято работами в плане, ч") ?? now.get("Занято работами в плане, не менее, ч"))
+        .toEqual(then.get("Потребность задач, ч") ?? then.get("Известная потребность задач, ч"));
     }
   });
 
@@ -155,13 +181,15 @@ describe("plan status and manager report with the fields of format 2", () => {
     expect(describeQuarterPlanStatus(calculate(snapshot()))).toEqual({ ready: false, reasons: ["Доля задана не у всех направлений."] });
   });
 
-  it("shows «Не задана» for such a share and lists only works in the plan", () => {
+  it("shows «не задана» for such a share and lists every work with its decision (B-1)", () => {
     const quarter = snapshot();
     const report = buildQuarterReport({ teamName: "Команда", snapshot: quarter, result: calculate(quarter), exportedAt: new Date("2026-10-06T09:00:00Z") });
     const sheet = (name: string) => report.sheets.find((item) => item.name === name)!;
-    const ui = sheet("Направления").rows.find((row) => row.cells[0].kind === "text" && row.cells[0].value === "УИ")!;
-    expect(ui.cells[1]).toEqual({ kind: "text", value: "Не задана" });
-    expect(sheet("Задачи").rows.map((row) => row.cells[0])).toEqual([{ kind: "text", value: "Работа p" }]);
+    const ui = sheet("Источники").rows.find((row) => row.cells[0].kind === "text" && row.cells[0].value === "УИ")!;
+    expect(ui.cells[2]).toEqual({ kind: "text", value: "не задана" });
+    expect(sheet("Работы").rows.map((row) => [row.cells[1], row.cells[2], row.cells[4]].map((cell) => (cell as { value: string }).value))).toEqual([
+      ["Работа p", "В плане квартала", "да"], ["Работа c", "На рассмотрении", "нет"], ["Работа o", "Не в этом квартале", "нет"]
+    ]);
   });
 });
 
