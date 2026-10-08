@@ -337,13 +337,14 @@ try {
 
   // A work outside the quarter: its group is closed by default, the kept form opens it again.
   await openSource("Продукт «Витрина»");
-  await click("Не в этом квартале");
+  await clickSelector(".pp-toggle[aria-expanded=false]");
   await menu("Новая главная страница", "Изменить…");
   await waitFor("document.activeElement?.id === 'edit-name'", "edit form of a work outside the quarter");
   await type("#edit-estimate", "300");
   await tab("Команда");
   await tab("План квартала");
   await waitFor("document.querySelector('#source-title')?.textContent === 'Продукт «Витрина»'", "the same source after the tab");
+  assert.equal(await evaluate("document.querySelector('.pp-toggle')?.getAttribute('aria-expanded')"), "true");
   assert.equal(await evaluate("document.querySelector('#edit-estimate')?.value ?? null"), "300", "the group outside the quarter opened with the form");
   await clickSelector("#edit-cancel");
   await waitFor("!document.querySelector('.pp-form[data-form=edit]')", "dropped on purpose");
