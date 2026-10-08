@@ -18,10 +18,6 @@ type Direction = Snapshot["directions"][number];
 type Update = (updater: (current: Snapshot) => Snapshot) => void;
 type Mark = WorkInput["mark"];
 
-/** The PO's hint for «Полная оценка, ч» (DEC-041), verbatim. */
-export const ESTIMATE_NOTE = "Укажите суммарные часы команды на работу, включая разработку, тестирование и необходимые обсуждения. "
-  + "Не включайте повторно время, уже учтённое организационным резервом. Это оценка трудозатрат, а не календарный срок.";
-
 const works = (count: number) => `${count} ${pluralRu(count, "работа", "работы", "работ")}`;
 const estimateText = (work: Pick<Work, "estimateHours">) => work.estimateHours === null ? "без оценки" : hours(work.estimateHours);
 const MARK_PLACE: Record<TaskMark, string> = { candidate: "на рассмотрении", plan: "в плане квартала", out: "в «Не в этом квартале»" };
@@ -398,7 +394,7 @@ function SourceWorkspace(props: WorkspaceProps) {
             {state?.missingEstimateCount ? <InfoHint info="bounds" /> : null}
             {plannedChanged && was && <span className="pp-was"> · было {was.missingEstimateCount ? "не менее " : ""}{hours(was.plannedKnownHours)}</span>}</span></div>
         <div className="pp-num"><span>Остаток квоты <InfoHint info="rest" /></span><strong className={over ? "over" : ""}>{restStrong}</strong>
-          <span className="pp-note">{!capacity?.quotaSet ? <Sign tone="unknown">доля не задана</Sign> : over ? <Sign tone="over">работ в плане больше квоты</Sign> : restChanged ? null : "по плановым оценкам работ"}
+          <span className="pp-note">{!capacity?.quotaSet ? <Sign tone="unknown">доля не задана</Sign> : over ? <Sign tone="over">работ в плане больше квоты</Sign> : null}
             {restChanged && was && <span className="pp-was">было: {was.overrunHours !== "0" ? `перебор ${formatDeficitHours(was.overrunHours, hours)}` : `${was.missingEstimateCount ? "не более " : ""}${hours(was.remainingHours)}`}</span>}</span></div>
       </div>
       <FillBar percent={fill} over={over} />
@@ -419,15 +415,15 @@ function SourceWorkspace(props: WorkspaceProps) {
         <p>В источнике пока нет работ. {capacity?.quotaSet ? `Квота ${hours(capacity.budgetHours)} закреплена за ним и другим источникам не достаётся.` : "Долю источника можно задать позже во вкладке «Источники и доли»."}</p>
         {!formOpen && <div className="project-actions"><button type="button" onClick={openForm}>Добавить работу</button></div>}
       </div> : <>
-        <div className="pp-group-head cand-head"><h3>На рассмотрении <InfoHint info="candidate" /></h3><span>{works(candidates.length)} · бюджет не занимают, пока не включены в план квартала</span></div>
+        <div className="pp-group-head cand-head"><h3>На рассмотрении <InfoHint info="candidate" /></h3><span>{works(candidates.length)}</span></div>
         {candidates.length ? withGhost(candidates.map(row), "candidate") : <>{ghostAt("candidate") && ghostLine(ghostAt("candidate")!)}<p className="pp-empty-works">На рассмотрении работ нет. Новые работы источника по умолчанию попадают сюда.</p></>}
         <div className="pp-group-head plan-head"><h3>В плане квартала <InfoHint info="plan" /></h3>
           <span>{works(planned.length)} · {state ? describePlanned(state, hours) : "—"}</span>
-          {state?.missingEstimateCount ? <Sign tone="unknown">{state.missingEstimateCount} без оценки, поэтому сумма «не менее»</Sign> : null}</div>
+          {state?.missingEstimateCount ? <Sign tone="unknown">{state.missingEstimateCount} без оценки</Sign> : null}</div>
         {planned.length ? withGhost(planned.map(row), "plan") : <>{ghostAt("plan") && ghostLine(ghostAt("plan")!)}<p className="pp-empty-works">В план квартала пока ничего не включено.</p></>}
         {(out.length > 0 || ghostAt("out")) && <>
-          <button type="button" className="pp-toggle" aria-expanded={showOut} onClick={() => setShowOut(!showOut)}>
-            <b><TriangleIcon open={showOut} /> Не в этом квартале</b>&nbsp;<span>{works(out.length)} · бюджет не занимают</span></button>
+          <div className="pp-toggle-row"><button type="button" className="pp-toggle" aria-expanded={showOut} onClick={() => setShowOut(!showOut)}>
+            <b><TriangleIcon open={showOut} /> Не в этом квартале</b>&nbsp;<span>{works(out.length)}</span></button><InfoHint info="out" /></div>
           {showOut && withGhost(out.map(row), "out")}
           {!showOut && ghostAt("out") && ghostLine(ghostAt("out")!)}
         </>}
@@ -514,10 +510,9 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
   const toPlan = input.mark === "plan";
   const duplicate = input.name.trim() ? existing.find((work) => work.name.trim().toLowerCase() === input.name.trim().toLowerCase()) : undefined;
 
-  let effect: ReactNode;
+  let effect: ReactNode = null;
   if (!input.name.trim() && !input.estimate.trim()) {
-    effect = toPlan ? <span><b>Сразу в план квартала:</b> работа займёт бюджет источника, как только вы её добавите.</span>
-      : <span><b>На рассмотрение:</b> бюджет не займёт, пока вы не включите работу в план квартала.</span>;
+    effect = null;
   } else if (estimate.kind === "invalid") {
     effect = <span className="project-muted">Последствие появится, когда оценка будет понятна.</span>;
   } else if (!capacity) {
@@ -527,7 +522,7 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
     const text = describeInclusion(capacity, hoursValue, hours);
     const tone = !capacity.quotaSet || hoursValue === null ? "unknown" : text.includes("перебор") ? "over" : "fits";
     effect = toPlan ? <Sign tone={tone}>{text}</Sign>
-      : <span><b>Бюджет не займёт.</b> <span className="project-muted">Если включить в план:</span> {text}</span>;
+      : <span><span className="project-muted">Если включить в план квартала:</span> {text}</span>;
   }
 
   function submit() {
@@ -567,7 +562,7 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
         {duplicate && <Sign tone="unknown">Такая работа уже есть {MARK_PLACE[duplicate.mark]}.</Sign>}</label>
       <label htmlFor="add-estimate"><span>Полная оценка, ч <InfoHint info="estimate" /></span>
         <input type="text" id="add-estimate" value={input.estimate} inputMode="decimal" placeholder="Без оценки" autoComplete="off"
-          aria-invalid={Boolean(shown("estimate"))} aria-describedby="add-estimate-hint add-estimate-note"
+          aria-invalid={Boolean(shown("estimate"))} aria-describedby="add-estimate-hint"
           onChange={(event) => onChange({ estimate: event.target.value })} onBlur={() => setTouched((current) => ({ ...current, estimate: true }))} />
         {shown("estimate") && <span className="project-field-error">{shown("estimate")}</span>}
         {estimate.kind === "hours" && estimate.hours === "0" && <span className="pp-hint pp-zero" role="status">{ZERO_ESTIMATE_NOTE}</span>}
@@ -581,7 +576,6 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
         {toPlan && input.remembered && <span className="pp-remembered">Как в прошлый раз для «{source.name}»</span>}
       </fieldset>
     </div>
-    <p className="pp-est-note" id="add-estimate-note"><b>Что входит в оценку.</b> {ESTIMATE_NOTE}</p>
     <div className="pp-form-row second">
       <label htmlFor="add-link"><span>Ссылка на Kaiten <span className="project-muted">· необязательно</span></span>
         <input type="text" id="add-link" value={input.link} placeholder="https:// …" autoComplete="off" maxLength={QUARTER_INPUT_LIMITS.linkCharacters}
@@ -629,10 +623,9 @@ function EditWorkForm({ work, capacity, edit, setEdit, onCancel, onSave }: {
         {shown("name") && <span className="project-field-error">{shown("name")}</span>}</label>
       <label htmlFor="edit-estimate"><span>Полная оценка, ч <InfoHint info="estimate" /></span>
         <input type="text" id="edit-estimate" value={edit.estimate} inputMode="decimal" placeholder="Без оценки" autoComplete="off"
-          aria-invalid={Boolean(shown("estimate"))} aria-describedby="edit-estimate-note" onChange={(event) => setEdit({ ...edit, estimate: event.target.value })} />
+          aria-invalid={Boolean(shown("estimate"))} onChange={(event) => setEdit({ ...edit, estimate: event.target.value })} />
         {shown("estimate") && <span className="project-field-error">{shown("estimate")}</span>}</label>
     </div>
-    <p className="pp-est-note" id="edit-estimate-note"><b>Что входит в оценку.</b> {ESTIMATE_NOTE}</p>
     <div className="pp-form-row second">
       <label htmlFor="edit-link"><span>Ссылка на Kaiten <span className="project-muted">· необязательно</span></span>
         <input type="text" id="edit-link" value={edit.link} placeholder="https:// …" autoComplete="off" maxLength={QUARTER_INPUT_LIMITS.linkCharacters}

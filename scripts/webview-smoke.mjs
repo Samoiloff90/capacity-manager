@@ -394,7 +394,7 @@ try {
   assert.equal(await evaluate("document.querySelector('.project-plan-select select').value"), q4);
   await openSource("Продукт");
   assert.deepEqual((await workRows()).map(({ name, estimate }) => ({ name, estimate })), [{ name: "Анализ продукта", estimate: "30 ч" }]);
-  assert.equal(await evaluate("document.querySelector('.pp-toggle')?.textContent.replace(/\\u00a0/g, ' ').trim()"), "Не в этом квартале 1 работа · бюджет не занимают");
+  assert.equal(await evaluate("document.querySelector('.pp-toggle')?.textContent.replace(/\\u00a0/g, ' ').trim()"), "Не в этом квартале 1 работа");
   await click("Источники и доли");
   await expectSource("Продукт", { quota: "50,40 ч", planned: "30 ч", rest: "20,40 ч" });
   await expectSource("Встречи и резерв", { quota: "201,60 ч", planned: "25 ч", rest: "176,60 ч" });

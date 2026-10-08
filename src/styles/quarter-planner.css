@@ -201,3 +201,5 @@
   .pp-num + .pp-num { border-left: 0; border-top: 1px solid #e7edf5; padding: 10px 0 0; }
   .pp-form-row, .pp-form-row.second { grid-template-columns: 1fr; }
 }
+.pp-toggle-row { align-items: center; background: #f7f9fc; border-top: 1px solid #dfe6f0; display: flex; padding-right: 12px; }
+.project-app .pp-toggle-row .pp-toggle { border-top: 0; flex: 1; width: auto; }

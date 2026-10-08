@@ -321,7 +321,7 @@ function PlanTotals({ result }: { result: QuarterCapacityResult | null }) {
     <div className="project-total">
       <span className="project-total-label">Доступно команде <InfoHint info="available" /></span>
       <strong>{result ? hours(result.totals.availableHours) : "—"}</strong>
-      <span className="project-total-note">{members} {pluralRu(members, "сотрудник", "сотрудника", "сотрудников")} · после отсутствий и ставок</span>
+      <span className="project-total-note">{members} {pluralRu(members, "сотрудник", "сотрудника", "сотрудников")}</span>
     </div>
     <div className="project-total">
       <span className="project-total-label">Резерв на встречи <InfoHint info="reserve" /></span>
@@ -334,14 +334,14 @@ function PlanTotals({ result }: { result: QuarterCapacityResult | null }) {
       <strong>{plan ? <>{plan.plannedMissingEstimateCount ? <span className="pp-q">не менее </span> : null}{hours(plan.plannedKnownHours)}</> : "—"}</strong>
       <span className="project-total-note">{!plan ? "" : plan.plannedMissingEstimateCount
         ? <Sign tone="unknown">{plan.plannedMissingEstimateCount} {pluralRu(plan.plannedMissingEstimateCount, "работа", "работы", "работ")} без оценки</Sign>
-        : plan.planCount ? "по оценкам работ в плане квартала" : "работ в плане нет"}</span>
+        : plan.planCount ? `${plan.planCount} ${pluralRu(plan.planCount, "работа", "работы", "работ")} в плане` : "работ в плане нет"}</span>
     </div>
     <div className="project-total">
       <span className="project-total-label">Остатки квот <InfoHint info="rest" /></span>
       <strong>{plan ? <>{plan.plannedMissingEstimateCount && plan.remainingHours !== "0" ? <span className="pp-q">не более </span> : null}{hours(plan.remainingHours)}</> : "—"}</strong>
       <span className="project-total-note">{!plan ? "" : plan.overrunSourceCount
         ? <Sign tone="over">перебор {formatDeficitHours(plan.overrunHours, hours)} в {plan.overrunSourceCount} {pluralRu(plan.overrunSourceCount, "источнике", "источниках", "источниках")}</Sign>
-        : "закреплены за источниками"}</span>
+        : null}</span>
     </div>
     <div className="project-total">
       <span className="project-total-label">Не распределено <InfoHint info="unallocated" /></span>

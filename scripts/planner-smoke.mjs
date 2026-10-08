@@ -422,7 +422,7 @@ try {
   await openSource("Поддержка");
   await click("Добавить работу");
   await waitFor("Boolean(document.querySelector('.pp-form[data-form=add]'))", "form without a calculation");
-  assert.equal(await textOf(".pp-form[data-form=add] .pp-effect-line"), "На рассмотрение: бюджет не займёт, пока вы не включите работу в план квартала.");
+  assert.equal(await textOf(".pp-form[data-form=add] .pp-effect-line"), "");
   await type("#add-estimate", "8");
   assert.equal(await textOf(".pp-form[data-form=add] .pp-effect-line"), "Последствие появится после заполнения данных квартала.");
   await type("#add-estimate", "");
