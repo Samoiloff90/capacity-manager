@@ -254,6 +254,14 @@ export class ProjectWorkspaceController {
     });
   }
 
+  /** «Изменения работы «X» не применены и не сохранены: …»; empty without such changes (R-001). */
+  private unappliedNotice(planId: string): string {
+    const unapplied = this.unappliedEdits(planId).map((work) => `«${work.name}»`);
+    if (!unapplied.length) return "";
+    return `${unapplied.length === 1 ? `Изменения работы ${unapplied[0]} не применены` : `Изменения работ ${unapplied.join(", ")} не применены`}`
+      + " и не сохранены: нажмите «Сохранить изменения» в форме работы.";
+  }
+
   /**
    * Unfinished input of new works and unapplied changes of existing works, named for the dialog
    * with the source's current name; blank forms, forms of sources deleted since and changes of
@@ -372,10 +380,8 @@ export class ProjectWorkspaceController {
     const problems = calculation.ok ? describeSaveProblems(calculation.result, formatScreenHours) : [];
     const title = quarterTitle(captured);
     // A change still in the form of a work is not in the quarter: saving must not look like it was (R-001).
-    const unapplied = this.unappliedEdits(saved.planId).map((work) => `«${work.name}»`);
-    const notApplied = !unapplied.length ? ""
-      : ` ${unapplied.length === 1 ? `Изменения работы ${unapplied[0]} не применены` : `Изменения работ ${unapplied.join(", ")} не применены`}`
-        + " и не сохранены: нажмите «Сохранить изменения» в форме работы.";
+    const unapplied = this.unappliedNotice(saved.planId);
+    const notApplied = unapplied ? ` ${unapplied}` : "";
     this.publish({
       notice: this.upgradeNotice + (this.state.dirty
         ? `Изменения квартала «${title}» сохранены. Более поздние изменения ещё не сохранены.`
@@ -514,6 +520,11 @@ export class ProjectWorkspaceController {
       return true;
     }),
     save: (): Promise<boolean> => this.run("save", () => this.persistDraft()),
+    /** Ctrl+S with nothing to save: a change still in the form of a work is named, not passed over (R-001). */
+    explainNothingToSave: (): void => {
+      const notice = this.state.activePlanId ? this.unappliedNotice(this.state.activePlanId) : "";
+      if (notice) this.publish({ notice, error: "", warning: "" });
+    },
     /** Exports the saved quarter; the native command shows "Save as". Cancelling is not an error. */
     exportReport: (): Promise<boolean> => this.run("export", async () => {
       const { report: availability, saved, result } = this.reportAvailability();

@@ -1023,6 +1023,8 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
       await controller.actions.openProject(folderA);
       await controller.actions.selectPlan("q1");
       controller.actions.setWorkEdit(editKey, opened);
+      controller.actions.explainNothingToSave();
+      expect(controller.getSnapshot().notice).toBe("");
       expect(await controller.actions.closeProject()).toBe(true);
       expect(controller.getSnapshot().workEdits).toEqual({});
     });
@@ -1039,6 +1041,10 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
       expect(await controller.actions.selectPlan("q1")).toBe(true);
       expect(controller.getSnapshot().workEdits[editKey]).toEqual(changed);
 
+      // Ctrl+S with the quarter unchanged saves nothing and names the change in the form.
+      controller.actions.explainNothingToSave();
+      expect(controller.getSnapshot().notice).toBe("Изменения работы «Отчёт для финансовой службы» не применены и не сохранены: "
+        + "нажмите «Сохранить изменения» в форме работы.");
       // Ctrl+S saves the quarter and says the change in the form is not in it.
       expect(await controller.actions.save()).toBe(true);
       expect(controller.getSnapshot().notice).toBe("Изменения квартала «1 квартал 2026 года» сохранены. Изменения работы «Отчёт для финансовой службы» "

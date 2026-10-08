@@ -111,7 +111,8 @@ export default function ProjectApp() {
   saveFromKeyboard.current = () => {
     // Inside the reserve and import windows Ctrl+S does not save: the window asks to finish with it first.
     if (tabDialog || (creatingQuarter && state.project)) { setSaveHint((count) => count + 1); return; }
-    if (disabled || state.confirmation || state.formatUpgrade || creatingQuarter || renaming || !state.draft || !state.dirty) return;
+    if (disabled || state.confirmation || state.formatUpgrade || creatingQuarter || renaming || !state.draft) return;
+    if (!state.dirty) { actions.explainNothingToSave(); return; }
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     focused?.blur();
     void actions.save().finally(() => restoreFocus(focused));

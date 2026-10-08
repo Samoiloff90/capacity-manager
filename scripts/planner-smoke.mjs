@@ -302,12 +302,26 @@ try {
   assert.deepEqual(await editFields(), typed, "another quarter kept the change");
   step("R-001: … another source (marked «ввод не закончен») and another quarter");
 
+  // The quarter itself is unchanged: Ctrl+S saves nothing and names the change in the form.
   await saveShortcut();
-  await waitFor("Array.from(document.querySelectorAll('.project-message[role=status]')).some(m => m.textContent.includes('не применены'))", "save notice");
+  await waitFor("Array.from(document.querySelectorAll('.project-message[role=status]')).some(m => m.textContent.includes('не применены'))", "notice of Ctrl+S");
+  assert((await texts(".project-message[role=status]")).includes("Изменения работы «Выгрузка для бухгалтерии» не применены и не сохранены: "
+    + "нажмите «Сохранить изменения» в форме работы."), (await texts(".project-message[role=status]")).join(" | "));
+  assert.deepEqual(await editFields(), typed);
+  // With a change of the quarter too, Ctrl+S saves it and still names the change in the form.
+  await tab("Источники и доли");
+  const techDebt = await evaluate("Array.from(document.querySelectorAll('table.pp-sources input[aria-label=\"Название источника\"]')).find(i => i.value === 'Техдолг').closest('tr').querySelector('.pp-share').id");
+  await type(`#${techDebt}`, "11");
+  await key(`#${techDebt}`, "Tab");
+  await waitFor("document.querySelector('.project-status')?.textContent === 'Есть несохранённые изменения'", "the quarter changed");
+  await saveShortcut();
+  await waitFor("document.querySelector('.project-status')?.textContent === 'Все изменения сохранены'", "saved by Ctrl+S");
   assert((await texts(".project-message[role=status]")).includes("Изменения квартала «1 квартал 2027 года» сохранены. Изменения работы «Выгрузка для бухгалтерии» "
     + "не применены и не сохранены: нажмите «Сохранить изменения» в форме работы."), (await texts(".project-message[role=status]")).join(" | "));
+  await tab("План квартала");
+  if (await evaluate("document.querySelector('#source-title')?.textContent !== 'Запросы УИ'")) await openSource("Запросы УИ");
   assert.deepEqual(await editFields(), typed);
-  step("R-001: Ctrl+S saves the quarter and says the change in the form is not saved");
+  step("R-001: Ctrl+S never says the change in the form was saved, with and without changes of the quarter");
 
   await key("#edit-name", "Escape");
   await waitFor("!document.querySelector('.pp-form[data-form=edit]')", "form closed by Esc");
