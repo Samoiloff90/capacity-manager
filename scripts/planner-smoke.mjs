@@ -261,7 +261,7 @@ const result = { root, steps, passed: false, pasteModes: [] };
 try {
   await cdp("Runtime.enable");
   await waitFor("Boolean(document.querySelector('.project-welcome'))", "fresh EXE on the welcome screen");
-  assert.match(await textOf(".project-preview-note"), /^Тестовая версия 0\.4\.0-alpha\.\d+ с новым форматом проектов/);
+  assert.match(await textOf(".project-preview-note"), /^(?:Тестовая версия 0\.4\.0-alpha|Кандидат в релиз 0\.4\.0-rc)\.\d+ с новым форматом проектов/);
   await mkdir(root);
 
   // E. R-001: the change of an existing work typed into its form and not applied is kept for the
@@ -346,7 +346,7 @@ try {
   await openProject(alpha);
   step("demo project opened on «План квартала»");
   assert.equal(await textOf(".project-tabs [aria-selected=true]"), "План квартала");
-  assert.match(await textOf(".project-topbar .project-chip.preview"), /^Тестовая версия 0\.4\.0-alpha\.\d+$/);
+  assert.match(await textOf(".project-topbar .project-chip.preview"), /^(?:Тестовая версия 0\.4\.0-alpha|Кандидат в релиз 0\.4\.0-rc)\.\d+$/);
   assert.deepEqual(await totals(), {
     "Доступно команде": "2 000 ч", "Резерв на встречи": "344,80 ч", "Занято работами": "не менее 980 ч",
     "Остатки квот": "не более 390 ч", "Не распределено": "305,20 ч"

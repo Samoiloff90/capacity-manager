@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Capacity Planner Alpha",
-  "version": "0.4.0-alpha.2",
+  "productName": "Capacity Planner RC",
+  "version": "0.4.0-rc.1",
   "identifier": "local.capacity-planner.alpha",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "Capacity Planner Alpha — тестовая версия 0.4.0-alpha.2",
+        "title": "Capacity Planner RC — кандидат в релиз 0.4.0-rc.1",
         "width": 1320,
         "height": 860,
         "minWidth": 1080,

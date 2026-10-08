@@ -11,7 +11,7 @@ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS is appended to the app's own arguments):
   control - fresh profile; CSP is bypassed through CDP and the page POSTs a control marker to
             https://example.com. The summary must find it, otherwise the method is broken.
   fresh   - fresh profile; webview-smoke and report-export-smoke with marker data; with
-            -DemoDir (or the demo archive of -Tag, 0.4.0-alpha.2 and later) also planner-smoke:
+            -DemoDir (or the demo archive of -Tag, 0.4.0-alpha.2, 0.4.0-rc.N and later) also planner-smoke:
             the quarter planner and the paste of works from the real clipboard.
   warm    - the same profile again; webview-smoke with marker data.
 NetLog runs in capture mode Everything with QUIC disabled (QUIC content cannot be read). All
@@ -52,7 +52,7 @@ $appDir = Join-Path $work 'app'
 Expand-Archive -LiteralPath $ZipPath -DestinationPath $appDir
 
 # Demo projects of the same release, for planner-smoke (fictional data, 0.4.0-alpha.2 and later).
-if (-not $DemoDir -and $Tag -match '^v0\.4\.0-alpha\.(\d+)$' -and [int]$Matches[1] -ge 2) {
+if (-not $DemoDir -and ($Tag -match '^v0\.4\.0-rc\.\d+$' -or ($Tag -match '^v0\.4\.0-alpha\.(\d+)$' -and [int]$Matches[1] -ge 2))) {
     $version = $Tag.TrimStart('v')
     $demoName = "Capacity-Planner-$version-demo-projects"
     $demoZip = Join-Path $work "$demoName.zip"

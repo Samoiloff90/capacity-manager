@@ -35,6 +35,8 @@ const newId = () => crypto.randomUUID();
 const numberText = (value: string) => value.replace(".", ",");
 /** A preview build says so in the window (0.4.0-alpha.1); a release shows nothing extra. */
 const PREVIEW_VERSION = __APP_VERSION__.includes("-") ? __APP_VERSION__ : null;
+/** «Тестовая версия 0.4.0-alpha.2»; a release candidate is named as such: «Кандидат в релиз 0.4.0-rc.1». */
+const PREVIEW_LABEL = PREVIEW_VERSION && `${/-rc\./.test(PREVIEW_VERSION) ? "Кандидат в релиз" : "Тестовая версия"} ${PREVIEW_VERSION}`;
 
 /** "Сохраните квартал" → "Отчёт: сохраните квартал"; a hint that already names the report stays as is. */
 function reportHint(hint: string): string {
@@ -183,7 +185,7 @@ export default function ProjectApp() {
         <img src={appIcon} alt="" width={64} height={64} />
         <div><h1>Capacity Planner</h1><p className="project-welcome-subtitle">Планирование ёмкости команды</p></div>
       </header>
-      {PREVIEW_VERSION && <p className="project-message warning project-preview-note">Тестовая версия {PREVIEW_VERSION} с новым форматом проектов. Открывайте учебные проекты или копии своих: проект версии 0.3.0 при первом сохранении обновляется, и версия 0.3.0 его уже не откроет. Перед обновлением создаётся резервная копия.</p>}
+      {PREVIEW_VERSION && <p className="project-message warning project-preview-note">{PREVIEW_LABEL} с новым форматом проектов. Открывайте учебные проекты или копии своих: проект версии 0.3.0 при первом сохранении обновляется, и версия 0.3.0 его уже не откроет. Перед обновлением создаётся резервная копия.</p>}
       <p className="project-welcome-lead">Люди, рабочие дни и распределение часов на квартал. Каждая команда хранится в отдельной папке на вашем компьютере.</p>
       {messages}
       <div className="project-welcome-grid">
@@ -220,7 +222,7 @@ export default function ProjectApp() {
             <button className="project-icon-button" type="button" disabled={disabled} aria-label="Изменить название команды"
               title="Изменить название команды" onClick={() => setRenaming(true)}><PencilIcon /><span className="visually-hidden">Изменить название команды</span></button>
           </div>}
-          {PREVIEW_VERSION && <span className="project-chip preview" title="Новый формат проектов: версия 0.3.0 обновлённый проект не откроет">Тестовая версия {PREVIEW_VERSION}</span>}
+          {PREVIEW_VERSION && <span className="project-chip preview" title="Новый формат проектов: версия 0.3.0 обновлённый проект не откроет">{PREVIEW_LABEL}</span>}
           <div className="project-path" title="Папка проекта">{state.project.folderPath.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "")}</div>
         </div>
         <span className={`project-status ${state.confirmation || state.formatUpgrade || unsaved ? "dirty" : "saved"}`} role="status">{status}</span>
