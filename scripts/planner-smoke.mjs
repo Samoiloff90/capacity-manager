@@ -8,6 +8,8 @@
 // Only the folder picker is replaced. Project files, SQL, the calculation and the UI are real.
 // Section D puts the fictional import template (tests/fixtures/import-template.ts) on the real
 // Windows clipboard and pastes it with Ctrl+V into the running app.
+// Section E runs first: an unapplied change of an existing work (R-001) survives another tab,
+// source and quarter, Ctrl+S does not claim it, Esc keeps it and closing the project names it.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cp, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
@@ -261,6 +263,82 @@ try {
   await waitFor("Boolean(document.querySelector('.project-welcome'))", "fresh EXE on the welcome screen");
   assert.match(await textOf(".project-preview-note"), /^Тестовая версия 0\.4\.0-alpha\.\d+ с новым форматом проектов/);
   await mkdir(root);
+
+  // E. R-001: the change of an existing work typed into its form and not applied is kept for the
+  // session (DEC-039, QUARTER_PLANNING_UX.md «Незаконченный ввод») or named before it is lost.
+  const editing = join(root, "Alpha-edit");
+  await cp(join(demo, "Alpha-new-format"), editing, { recursive: true });
+  await openProject(editing);
+  await openSource("Запросы УИ");
+  assert.equal(await status(), "Все изменения сохранены");
+  const editFields = () => evaluate(`['name', 'estimate', 'link', 'comment'].map(f => document.querySelector('#edit-' + f)?.value ?? null)`);
+  const typed = ["Выгрузка для бухгалтерии v2", "34", "https://kaiten.example.com/space/12/card/301", "Уточнено с заказчиком"];
+  await menu("Выгрузка для бухгалтерии", "Изменить…");
+  await waitFor("document.activeElement?.id === 'edit-name'", "edit form");
+  for (const [index, field] of ["name", "estimate", "link", "comment"].entries()) await type(`#edit-${field}`, typed[index]);
+  await tab("Команда");
+  await tab("План квартала");
+  await waitFor("document.querySelector('#source-title')?.textContent === 'Запросы УИ'", "the same source after the tab");
+  assert.deepEqual(await editFields(), typed, "another tab kept the change");
+  assert.equal(await status(), "Все изменения сохранены");
+  step("R-001: a change of four fields of an existing work survives another tab");
+
+  await openSource("Техдолг");
+  assert.equal(await evaluate("Boolean(document.querySelector('.pp-form[data-form=edit]'))"), false);
+  assert.match(await evaluate("Array.from(document.querySelector('.pp-switch select').options).find(o => o.textContent.startsWith('Запросы УИ')).textContent"), /✎ ввод не закончен$/);
+  await openSource("Запросы УИ");
+  assert.deepEqual(await editFields(), typed, "another source kept the change");
+  await click("Новый квартал…");
+  await waitFor("Boolean(document.querySelector('#new-quarter-title'))", "new quarter dialog");
+  await type(".project-new-quarter .project-year input", "2027");
+  await choose(".project-new-quarter select", "2");
+  await click("Создать квартал");
+  await waitFor("!document.querySelector('#new-quarter-title') && document.querySelector('select[aria-label=\"Квартал\"]')?.selectedOptions[0]?.textContent.startsWith('2 квартал')", "second quarter");
+  const firstQuarter = await evaluate("Array.from(document.querySelector('select[aria-label=\"Квартал\"]').options).find(o => o.textContent.startsWith('1 квартал')).value");
+  await choose('select[aria-label="Квартал"]', firstQuarter);
+  await waitFor("document.querySelector('select[aria-label=\"Квартал\"]')?.selectedOptions[0]?.textContent.startsWith('1 квартал')", "back to the first quarter");
+  if (!await evaluate("document.querySelector('.project-tabs [aria-selected=true]')?.textContent.startsWith('План квартала')")) await tab("План квартала");
+  if (await evaluate("document.querySelector('#source-title')?.textContent !== 'Запросы УИ'")) await openSource("Запросы УИ");
+  assert.deepEqual(await editFields(), typed, "another quarter kept the change");
+  step("R-001: … another source (marked «ввод не закончен») and another quarter");
+
+  await saveShortcut();
+  await waitFor("Array.from(document.querySelectorAll('.project-message[role=status]')).some(m => m.textContent.includes('не применены'))", "save notice");
+  assert((await texts(".project-message[role=status]")).includes("Изменения квартала «1 квартал 2027 года» сохранены. Изменения работы «Выгрузка для бухгалтерии» "
+    + "не применены и не сохранены: нажмите «Сохранить изменения» в форме работы."), (await texts(".project-message[role=status]")).join(" | "));
+  assert.deepEqual(await editFields(), typed);
+  step("R-001: Ctrl+S saves the quarter and says the change in the form is not saved");
+
+  await key("#edit-name", "Escape");
+  await waitFor("!document.querySelector('.pp-form[data-form=edit]')", "form closed by Esc");
+  assert.match(plain(await evaluate(`${workRow("Выгрузка для бухгалтерии")}.textContent`)), /✎ изменение не применено Продолжить изменение/);
+  await clickSelector("#crumb-back");
+  await waitFor("Boolean(document.querySelector('.pp-overview'))", "overview");
+  assert.match((await overviewRow("Запросы УИ"))[0], /✎ изменение работы не применено/);
+  await openSource("Запросы УИ");
+  await click("Продолжить изменение", `(${workRow("Выгрузка для бухгалтерии")})`);
+  await waitFor("Boolean(document.querySelector('.pp-form[data-form=edit]'))", "the form again");
+  assert.deepEqual(await editFields(), typed, "Esc kept the change");
+  step("R-001: Esc closes the form and keeps the change, marked at the work and in the table of sources");
+
+  await click("Закрыть проект");
+  await waitFor("Boolean(document.querySelector('[role=alertdialog]'))", "dialog about the unapplied change");
+  assert.equal(plain(await textOf("#discard-message")), "Незаконченный ввод работ в файл проекта не сохраняется и будет потерян:"
+    + "«Запросы УИ», 1 квартал 2027 года: изменения работы «Выгрузка для бухгалтерии» не применены");
+  await click("Отмена", "document.querySelector('[role=alertdialog]')");
+  await waitFor("!document.querySelector('[role=alertdialog]') && Boolean(document.querySelector('.pp-form[data-form=edit]'))", "still open after «Отмена»");
+  assert.deepEqual(await editFields(), typed);
+  step("R-001: closing the project names the change; «Отмена» keeps the project and the form");
+
+  await clickSelector("#edit-cancel");
+  await waitFor("!document.querySelector('.pp-form[data-form=edit]')", "change dropped on purpose");
+  assert.doesNotMatch(plain(await evaluate(`${workRow("Выгрузка для бухгалтерии")}.textContent`)), /изменение не применено/);
+  assert.deepEqual(await head(), ["250 ч", "200 ч", "50 ч"]);
+  const editSession = await evaluate("window.__plannerSession?.sessionKey");
+  const unchanged = (await rows(editSession)).find((row) => row.quarter === 1).payload.tasks.find((task) => task.id === "w-export");
+  assert.deepEqual([unchanged.name, unchanged.estimateHours, unchanged.link, unchanged.comment], ["Выгрузка для бухгалтерии", "120", null, null]);
+  await closeProject();
+  step("R-001: «Отмена» in the form drops the change on purpose; the file kept the work as it was; closing asks nothing");
 
   // A. The fictional demo project in the new format: the PO's control example of DEC-041.
   const alpha = join(root, "Alpha");

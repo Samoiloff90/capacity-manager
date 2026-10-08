@@ -272,8 +272,8 @@ export default function ProjectApp() {
                 update={actions.updateDraft} setPending={setPending} saveHint={saveHint} onDialog={onTabDialog} />}
               {tab === "plan" && state.activePlanId && <PlanTab planId={state.activePlanId} quarter={quarterTitle(state.draft)}
                 snapshot={state.draft} result={result} update={actions.updateDraft}
-                workInputs={state.workInputs} lastMarks={state.lastMarks}
-                setWorkInput={actions.setWorkInput} rememberMark={actions.rememberMark}
+                workInputs={state.workInputs} workEdits={state.workEdits} lastMarks={state.lastMarks}
+                setWorkInput={actions.setWorkInput} setWorkEdit={actions.setWorkEdit} rememberMark={actions.rememberMark}
                 importDrafts={state.importDrafts} importBatches={state.importBatches} setImportDraft={actions.setImportDraft}
                 recordImportBatch={actions.recordImportBatch} forgetImportBatch={actions.forgetImportBatch}
                 saveHint={saveHint} onDialog={onTabDialog}

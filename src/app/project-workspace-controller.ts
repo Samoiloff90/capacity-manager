@@ -56,6 +56,42 @@ export function isBlankWorkInput(input: Pick<WorkInput, "name" | "estimate" | "l
   return !input.name.trim() && !input.estimate.trim() && !input.link.trim() && !input.comment.trim();
 }
 
+type Work = QuarterSnapshot["tasks"][number];
+
+/**
+ * A change of an existing work typed into its form and not applied yet (R-001; DEC-039,
+ * QUARTER_PLANNING_UX.md, «Незаконченный ввод»). Kept per quarter and work while the project is
+ * open, like the input of a new work; never written to the project file.
+ */
+export type WorkEdit = Readonly<{
+  planId: string;
+  workId: string;
+  /** Named in the warning when closing the project would lose the change. */
+  quarter: string;
+  name: string;
+  estimate: string;
+  link: string;
+  comment: string;
+  /** The form is shown in its source; a closed change is marked at its work. */
+  open: boolean;
+  /** «Сохранить изменения» was refused: the errors of the fields stay shown. */
+  tried: boolean;
+}>;
+
+export const workEditKey = (planId: string, workId: string) => `${planId}:${workId}`;
+
+/** The form of a work as it opens: the work's own values. */
+export function editOfWork(planId: string, quarter: string, work: Work): WorkEdit {
+  return { planId, workId: work.id, quarter, name: work.name, estimate: work.estimateHours?.replace(".", ",") ?? "",
+    link: work.link ?? "", comment: work.comment ?? "", open: true, tried: false };
+}
+
+/** Whether the form says something else than the work: only then is there anything to lose. */
+export function isChangedEdit(edit: WorkEdit, work: Work): boolean {
+  const opened = editOfWork(edit.planId, edit.quarter, work);
+  return edit.name !== opened.name || edit.estimate !== opened.estimate || edit.link !== opened.link || edit.comment !== opened.comment;
+}
+
 export interface WorkspaceRepository {
   readonly session: Readonly<ProjectSession>;
   list(): Promise<StoredQuarterPlan[]>;
@@ -88,6 +124,8 @@ export interface WorkspaceState {
   report: { available: boolean; hint: string };
   /** Session memory of the planner, cleared with the project: see WorkInput. */
   workInputs: Readonly<Record<string, WorkInput>>;
+  /** Changes of existing works not applied yet, per quarter and work (workEditKey): see WorkEdit. */
+  workEdits: Readonly<Record<string, WorkEdit>>;
   /** The last «Куда добавить» per quarter and source, while the project is open (DEC-037). */
   lastMarks: Readonly<Record<string, WorkInput["mark"]>>;
   /** Rows from a spreadsheet not added yet, per quarter and source (importDraftKey); never written to the file. */
@@ -114,7 +152,7 @@ interface Dependencies {
 function emptyState(): WorkspaceState {
   return { project: null, plans: [], activePlanId: null, draft: null, dirty: false,
     busy: false, closeProtectionReady: true, error: "", notice: "", warning: "", calculation: null, confirmation: null,
-    formatUpgrade: null, report: { available: false, hint: "" }, workInputs: {}, lastMarks: {},
+    formatUpgrade: null, report: { available: false, hint: "" }, workInputs: {}, workEdits: {}, lastMarks: {},
     importDrafts: {}, importBatches: [] };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -201,19 +239,42 @@ export class ProjectWorkspaceController {
     return pending;
   }
 
+  /** The quarter as it is now: the draft of the open one, the saved snapshot of the others. */
+  private quarterOf(planId: string): QuarterSnapshot | null | undefined {
+    return planId === this.state.activePlanId ? this.state.draft : this.state.plans.find((plan) => plan.planId === planId)?.snapshot;
+  }
+
+  /** Changes of existing works not applied yet in one quarter: the works, as they are now. */
+  private unappliedEdits(planId: string): Work[] {
+    const quarter = this.quarterOf(planId);
+    if (!quarter) return [];
+    return Object.values(this.state.workEdits).flatMap((edit) => {
+      const work = edit.planId === planId ? quarter.tasks.find((task) => task.id === edit.workId) : undefined;
+      return work && isChangedEdit(edit, work) ? [work] : [];
+    });
+  }
+
   /**
-   * Unfinished input of new works, named for the dialog with the source's current name; blank
-   * forms and forms of sources deleted since are not listed.
+   * Unfinished input of new works and unapplied changes of existing works, named for the dialog
+   * with the source's current name; blank forms, forms of sources deleted since and changes of
+   * works deleted since are not listed.
    */
   private unfinishedInputs(): string[] {
-    const quarterOf = (planId: string) => planId === this.state.activePlanId ? this.state.draft
-      : this.state.plans.find((plan) => plan.planId === planId)?.snapshot;
+    const quarterOf = (planId: string) => this.quarterOf(planId);
     const works = Object.values(this.state.workInputs).filter((input) => !isBlankWorkInput(input)).flatMap((input) => {
       const quarter = quarterOf(input.planId);
       const source = quarter?.directions.find((direction) => direction.id === input.sourceId);
       if (quarter && !source) return [];
       const name = source?.name.trim() || input.sourceName;
       return [`«${name}», ${input.quarter}: ${input.name.trim() ? `«${input.name.trim()}»` : "работа без названия"}`];
+    });
+    // R-001: a change typed into the form of an existing work is lost as well.
+    const edits = [...new Set(Object.values(this.state.workEdits).map((edit) => edit.planId))].flatMap((planId) => {
+      const quarter = quarterOf(planId);
+      return this.unappliedEdits(planId).map((work) => {
+        const source = quarter?.directions.find((direction) => direction.id === work.directionId);
+        return `«${source?.name.trim() || "Без названия"}», ${quarter ? quarterTitle(quarter) : ""}: изменения работы «${work.name}» не применены`;
+      });
     });
     // Rows of an import that were not added (DEC-039): the clipboard may no longer hold them.
     const imports = Object.values(this.state.importDrafts).flatMap((draft) => {
@@ -224,7 +285,7 @@ export class ProjectWorkspaceController {
       const where = source ? `«${source.name.trim() || "Без названия"}»` : draft.openedFrom ? "удалённый источник" : "все источники";
       return [`${where}, ${quarterTitle(quarter)}: строки из таблицы, ещё не добавленные: ${count}`];
     });
-    return [...works, ...imports];
+    return [...works, ...edits, ...imports];
   }
 
   /**
@@ -310,10 +371,15 @@ export class ProjectWorkspaceController {
     // Saving does not balance the plan: an excess of shares or an overrun stays and is named.
     const problems = calculation.ok ? describeSaveProblems(calculation.result, formatScreenHours) : [];
     const title = quarterTitle(captured);
+    // A change still in the form of a work is not in the quarter: saving must not look like it was (R-001).
+    const unapplied = this.unappliedEdits(saved.planId).map((work) => `«${work.name}»`);
+    const notApplied = !unapplied.length ? ""
+      : ` ${unapplied.length === 1 ? `Изменения работы ${unapplied[0]} не применены` : `Изменения работ ${unapplied.join(", ")} не применены`}`
+        + " и не сохранены: нажмите «Сохранить изменения» в форме работы.";
     this.publish({
       notice: this.upgradeNotice + (this.state.dirty
         ? `Изменения квартала «${title}» сохранены. Более поздние изменения ещё не сохранены.`
-        : `Изменения квартала «${title}» сохранены.`),
+        : `Изменения квартала «${title}» сохранены.`) + notApplied,
       warning: problems.length ? `Сохранение не балансирует план: ${problems.join("; ")}. Это остаётся видно в итогах и таблицах, пока вы не измените доли или состав плана.` : ""
     });
     return true;
@@ -355,8 +421,8 @@ export class ProjectWorkspaceController {
       this.pendingForms.clear();
       this.pendingMessages.clear();
       // A backup made while saving the previous project stays named until the user reads it.
-      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim(), workInputs: {}, lastMarks: {},
-        importDrafts: {}, importBatches: [] });
+      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim(), workInputs: {}, workEdits: {},
+        lastMarks: {}, importDrafts: {}, importBatches: [] });
       let preference: string | null = null;
       try { preference = this.deps.readSelectedPlan?.(candidate.session.projectId) ?? null; }
       catch { /* Optional application-local preference. */ }
@@ -500,6 +566,12 @@ export class ProjectWorkspaceController {
       const workInputs = { ...this.state.workInputs };
       if (input) workInputs[key] = input; else delete workInputs[key];
       this.publish({ workInputs });
+    },
+    setWorkEdit: (key: string, edit: WorkEdit | null): void => {
+      if (!this.state.project) return;
+      const workEdits = { ...this.state.workEdits };
+      if (edit) workEdits[key] = edit; else delete workEdits[key];
+      this.publish({ workEdits });
     },
     rememberMark: (key: string, mark: WorkInput["mark"]): void => {
       if (!this.state.project) return;

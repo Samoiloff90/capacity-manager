@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  PROJECT_NAME_FORM, ProjectWorkspaceController, workInputKey, type DiscardAnswer, type WorkInput, type WorkspaceRepository
+  editOfWork, PROJECT_NAME_FORM, ProjectWorkspaceController, workEditKey, workInputKey, type DiscardAnswer, type WorkInput, type WorkspaceRepository
 } from "../src/app/project-workspace-controller";
 import type { QuarterReport } from "../src/export/quarter-report";
 import type { ReportSaveOutcome } from "../src/export/report-file";
@@ -1004,6 +1004,77 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
     controller.actions.answerDiscard(true);
     expect(await again).toBe(true);
     expect(controller.getSnapshot()).toMatchObject({ project: null, workInputs: {}, lastMarks: {} });
+  });
+
+  describe("an unapplied change of an existing work (R-001, QA-M04)", () => {
+    const work = { id: "w28", name: "Отчёт для финансовой службы", directionId: "ui", estimateHours: "28", mark: "plan" as const, link: null, comment: null };
+    const withWork = () => {
+      const q1 = savedPlan("q1", 1);
+      const snapshot = { ...q1.snapshot, directions: [{ id: "ui", name: "Запросы УИ", percent: null, kind: "work" as const, memberPercents: [] }], tasks: [work] };
+      return new MemoryRepository([{ ...q1, snapshot }, savedPlan("q2", 2)]);
+    };
+    const editKey = workEditKey("q1", "w28");
+    const opened = editOfWork("q1", "1 квартал 2026 года", work);
+    const changed = { ...opened, name: "Отчёт для финансовой службы v2", estimate: "34", link: "https://kaiten.example.com/card/301", comment: "уточнено" };
+    const named = "«Запросы УИ», 1 квартал 2026 года: изменения работы «Отчёт для финансовой службы» не применены";
+
+    it("a form opened and not changed loses nothing: closing asks nothing", async () => {
+      const { controller } = workspace(withWork());
+      await controller.actions.openProject(folderA);
+      await controller.actions.selectPlan("q1");
+      controller.actions.setWorkEdit(editKey, opened);
+      expect(await controller.actions.closeProject()).toBe(true);
+      expect(controller.getSnapshot().workEdits).toEqual({});
+    });
+
+    it("is kept across quarters, named by Ctrl+S as not saved and before the project closes", async () => {
+      const { controller, repository } = workspace(withWork());
+      await controller.actions.openProject(folderA);
+      await controller.actions.selectPlan("q1");
+      controller.actions.setWorkEdit(editKey, changed);
+      // Not part of the quarter until applied: nothing to save, another quarter keeps it.
+      expect(controller.getSnapshot().dirty).toBe(false);
+      expect(await controller.actions.selectPlan("q2")).toBe(true);
+      expect(controller.getSnapshot().confirmation).toBeNull();
+      expect(await controller.actions.selectPlan("q1")).toBe(true);
+      expect(controller.getSnapshot().workEdits[editKey]).toEqual(changed);
+
+      // Ctrl+S saves the quarter and says the change in the form is not in it.
+      expect(await controller.actions.save()).toBe(true);
+      expect(controller.getSnapshot().notice).toBe("Изменения квартала «1 квартал 2026 года» сохранены. Изменения работы «Отчёт для финансовой службы» "
+        + "не применены и не сохранены: нажмите «Сохранить изменения» в форме работы.");
+      expect((await repository.list()).find((plan) => plan.planId === "q1")!.snapshot.tasks).toEqual([work]);
+
+      const closing = controller.actions.closeProject();
+      await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toEqual({ message: lost, canSave: false, details: [named] }));
+      controller.actions.answerDiscard(false);
+      expect(await closing).toBe(false);
+      expect(controller.getSnapshot().workEdits[editKey]).toEqual(changed);
+
+      const again = controller.actions.closeProject();
+      await vi.waitFor(() => expect(controller.getSnapshot().confirmation).toBeTruthy());
+      controller.actions.answerDiscard(true);
+      expect(await again).toBe(true);
+      expect(controller.getSnapshot()).toMatchObject({ project: null, workEdits: {} });
+    });
+
+    it("joins the dialog of unsaved changes; a change of a work deleted since is not named", async () => {
+      const { controller } = workspace(withWork());
+      await controller.actions.openProject(folderA);
+      await controller.actions.selectPlan("q1");
+      controller.actions.setWorkEdit(editKey, changed);
+      changeFte(controller, "0.5");
+      const closing = controller.actions.closeProject();
+      await vi.waitFor(() => expect(controller.getSnapshot().confirmation?.details).toEqual([named]));
+      controller.actions.answerDiscard(false);
+      expect(await closing).toBe(false);
+
+      controller.actions.updateDraft((current) => ({ ...current, tasks: [] }));
+      const deleted = controller.actions.closeProject();
+      await vi.waitFor(() => expect(controller.getSnapshot().confirmation?.details).toEqual([]));
+      controller.actions.answerDiscard(true);
+      expect(await deleted).toBe(true);
+    });
   });
 
   it("lists the unfinished input in the same dialog as unsaved changes of the quarter", async () => {

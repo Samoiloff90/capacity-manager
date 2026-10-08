@@ -10,7 +10,9 @@ import {
 } from "../domain/capacity/source-plan";
 import { changedSinceImport, importDraftKey, pendingRowCount, removeImported, type ImportBatch, type ImportDraft } from "../import/work-import";
 import { ImportDialog, onNamePaste } from "./ImportDialog";
-import { isBlankWorkInput, workInputKey, type WorkInput } from "./project-workspace-controller";
+import {
+  editOfWork, isBlankWorkInput, isChangedEdit, workEditKey, workInputKey, type WorkEdit, type WorkInput
+} from "./project-workspace-controller";
 import { InfoHint } from "./project-ui";
 import { BackIcon, ChevronIcon, CloseIcon, DotsIcon, FillBar, hours, Kbd, Sign, TriangleIcon } from "./plan-ui";
 
@@ -31,8 +33,11 @@ export type PlanTabProps = {
   result: QuarterCapacityResult | null;
   update: Update;
   workInputs: Readonly<Record<string, WorkInput>>;
+  /** Changes of existing works not applied yet, kept by the controller for the session (R-001). */
+  workEdits: Readonly<Record<string, WorkEdit>>;
   lastMarks: Readonly<Record<string, Mark>>;
   setWorkInput: (key: string, input: WorkInput | null) => void;
+  setWorkEdit: (key: string, edit: WorkEdit | null) => void;
   rememberMark: (key: string, mark: Mark) => void;
   sourceId: string | null;
   onSourceChange: (sourceId: string | null) => void;
@@ -226,7 +231,7 @@ function Setup({ snapshot, result, onGoToTab }: Pick<PlanTabProps, "snapshot" | 
   </section>;
 }
 
-function Overview({ planId, snapshot, result, workInputs, onOpen, onImport, importLine }: PlanTabProps & {
+function Overview({ planId, snapshot, result, workInputs, workEdits, onOpen, onImport, importLine }: PlanTabProps & {
   onOpen: (id: string) => void; onImport: () => void; importLine: ReactNode;
 }) {
   const allocation = result ? describeAllocation(result) : null;
@@ -236,6 +241,7 @@ function Overview({ planId, snapshot, result, workInputs, onOpen, onImport, impo
     const input = workInputs[workInputKey(planId, id)];
     return Boolean(input && !isBlankWorkInput(input));
   };
+  const hasEdit = (id: string) => hasUnappliedEdit(snapshot, workEdits, planId, id);
   return <>
     <div className="project-section-heading"><div><h2>Источники работ <InfoHint info="source" /></h2>
       <p>Откройте источник, чтобы добавить работы или включить их в план квартала.</p></div>
@@ -268,7 +274,8 @@ function Overview({ planId, snapshot, result, workInputs, onOpen, onImport, impo
           return <tr key={direction.id} className="pp-clickable" onClick={() => onOpen(direction.id)}>
             <td><button type="button" className="pp-name" data-open-source={direction.id}
               onClick={(event) => { event.stopPropagation(); onOpen(direction.id); }}>{direction.name}</button>
-              {hasInput(direction.id) && <span className="pp-sub pp-draft-mark">✎ незаконченный ввод работы</span>}</td>
+              {hasInput(direction.id) ? <span className="pp-sub pp-draft-mark">✎ незаконченный ввод работы</span>
+                : hasEdit(direction.id) && <span className="pp-sub pp-draft-mark">✎ изменение работы не применено</span>}</td>
             <td className="project-number">{!capacity ? "—" : capacity.quotaSet
               ? `${effective === null ? "" : `${formatPercent(effective)} · `}${hours(capacity.budgetHours)}`
               : <span className="project-muted">доля не задана</span>}</td>
@@ -313,13 +320,18 @@ type WorkspaceProps = PlanTabProps & {
   importLine: ReactNode;
 };
 
-type EditState = { id: string; name: string; estimate: string; link: string; comment: string; tried: boolean };
+/** A work of this source has a change in its form that is not applied (R-001). */
+function hasUnappliedEdit(snapshot: Snapshot, edits: Readonly<Record<string, WorkEdit>>, planId: string, sourceId: string): boolean {
+  return snapshot.tasks.some((work) => {
+    const edit = work.directionId === sourceId ? edits[workEditKey(planId, work.id)] : undefined;
+    return Boolean(edit && isChangedEdit(edit, work));
+  });
+}
 
 function SourceWorkspace(props: WorkspaceProps) {
   const { planId, quarter, snapshot, result, source, capacity, undo, ghost, before, fresh, act, setGhost, setFresh, setFocusTarget } = props;
   const key = workInputKey(planId, source.id);
   const input = props.workInputs[key];
-  const [edit, setEdit] = useState<EditState | null>(null);
   const [showOut, setShowOut] = useState(false);
   const [copied, setCopied] = useState<{ id: string; ok: boolean } | null>(null);
   const [stuck, setStuck] = useState(false);
@@ -334,6 +346,10 @@ function SourceWorkspace(props: WorkspaceProps) {
   }, [source.id]);
 
   const list = snapshot.tasks.filter((task) => task.directionId === source.id);
+  // The form of a work is kept by the controller for the session, like a new work (R-001).
+  const editKey = (work: Work) => workEditKey(planId, work.id);
+  const editOf = (work: Work): WorkEdit | undefined => props.workEdits[editKey(work)];
+  const editing = list.find((work) => editOf(work)?.open);
   const candidates = list.filter((task) => task.mark === "candidate");
   const planned = list.filter((task) => task.mark === "plan");
   const out = list.filter((task) => task.mark === "out");
@@ -350,7 +366,7 @@ function SourceWorkspace(props: WorkspaceProps) {
       name: "", estimate: "", link: "", comment: "",
       mark: remembered ?? "candidate", remembered: Boolean(remembered), open: true
     });
-    setEdit(null);
+    if (editing) closeEdit(editing);
     setFocusTarget("#add-name");
     window.setTimeout(() => document.querySelector('[data-form="add"]')?.scrollIntoView({ block: "nearest" }), 0);
   }
@@ -386,12 +402,22 @@ function SourceWorkspace(props: WorkspaceProps) {
 
   function remove(work: Work) {
     act(source, (tasks) => tasks.filter((task) => task.id !== work.id));
+    props.setWorkEdit(editKey(work), null);
     setGhost({ sourceId: source.id, text: `Работа «${work.name}» удалена.`, undo: true });
     setFocusTarget("#btn-add");
   }
 
+  /** Esc closes the form; a change in it stays, marked at the work. */
+  function closeEdit(work: Work) {
+    const current = editOf(work);
+    if (current) props.setWorkEdit(editKey(work), isChangedEdit(current, work) ? { ...current, open: false } : null);
+  }
+
+  /** Opens the form with the change kept from before, if any; another open form closes. */
   function startEdit(work: Work, field: "name" | "link" = "name") {
-    setEdit({ id: work.id, name: work.name, estimate: work.estimateHours?.replace(".", ",") ?? "", link: work.link ?? "", comment: work.comment ?? "", tried: false });
+    if (editing && editing.id !== work.id) closeEdit(editing);
+    const kept = editOf(work);
+    props.setWorkEdit(editKey(work), kept ? { ...kept, open: true } : editOfWork(planId, quarter, work));
     if (work.mark === "out") setShowOut(true);
     setFocusTarget(field === "link" ? "#edit-link" : "#edit-name");
     window.setTimeout(() => document.querySelector('[data-form="edit"]')?.scrollIntoView({ block: "nearest" }), 0);
@@ -399,7 +425,7 @@ function SourceWorkspace(props: WorkspaceProps) {
 
   function saveEdit(work: Work, patch: Pick<Work, "name" | "estimateHours" | "link" | "comment">) {
     act(source, (tasks) => tasks.map((task) => task.id === work.id ? { ...task, ...patch } : task));
-    setEdit(null);
+    props.setWorkEdit(editKey(work), null);
     setFresh({ ids: [work.id], label: "изменена" });
     setGhost({ sourceId: source.id, text: `Работа изменена: «${patch.name}».`, undo: true });
     setFocusTarget(`[data-menu-for="${work.id}"]`);
@@ -421,7 +447,8 @@ function SourceWorkspace(props: WorkspaceProps) {
       {snapshot.directions.filter((item) => item.kind === "work").map((item) => {
         const row = result?.directions.find((capacityRow) => capacityRow.directionId === item.id);
         const other = props.workInputs[workInputKey(planId, item.id)];
-        return <option key={item.id} value={item.id}>{item.name} · {row ? describeRest(sourceState(row), hours) : "нет расчёта"}{item.id !== source.id && other && !isBlankWorkInput(other) ? " · ✎ ввод не закончен" : ""}</option>;
+        const unfinished = (other && !isBlankWorkInput(other)) || hasUnappliedEdit(snapshot, props.workEdits, planId, item.id);
+        return <option key={item.id} value={item.id}>{item.name} · {row ? describeRest(sourceState(row), hours) : "нет расчёта"}{item.id !== source.id && unfinished ? " · ✎ ввод не закончен" : ""}</option>;
       })}
     </select></label>;
 
@@ -447,16 +474,22 @@ function SourceWorkspace(props: WorkspaceProps) {
   };
 
   const row = (work: Work) => {
-    if (edit?.id === work.id) {
-      return <EditWorkForm key={work.id} work={work} capacity={capacity} edit={edit} setEdit={setEdit}
-        onCancel={() => { setEdit(null); setFocusTarget(`[data-menu-for="${work.id}"]`); }} onSave={(patch) => saveEdit(work, patch)} />;
+    const kept = editOf(work);
+    if (kept?.open) {
+      return <EditWorkForm key={work.id} work={work} capacity={capacity} edit={kept} setEdit={(next) => props.setWorkEdit(editKey(work), next)}
+        onClose={() => { closeEdit(work); setFocusTarget(`[data-menu-for="${work.id}"]`); }}
+        onCancel={() => { props.setWorkEdit(editKey(work), null); setFocusTarget(`[data-menu-for="${work.id}"]`); }}
+        onSave={(patch) => saveEdit(work, patch)} />;
     }
+    const unapplied = Boolean(kept && isChangedEdit(kept, work));
     const isFresh = fresh?.ids.includes(work.id);
     return <div key={work.id} className={`pp-row ${work.mark === "candidate" ? "cand" : "plan"}${isFresh ? " pp-fresh" : ""}`} data-work={work.id}>
       <div className="pp-wname">{work.name}
         {work.link && <span className="pp-link-chip" title={work.link}>Kaiten</span>}
         {copied?.id === work.id && copied.ok && <span className="pp-copied" role="status">Ссылка скопирована</span>}
         {isFresh && fresh && <> <span className="project-chip fresh">{fresh.label}</span></>}
+        {unapplied && <span className="pp-sub pp-draft-mark pp-edit-mark">✎ изменение не применено{" "}
+          <button type="button" className="project-link-button" onClick={() => startEdit(work)}>Продолжить изменение</button></span>}
         {work.comment && <span className="pp-comment">{work.comment}</span>}
         {copied?.id === work.id && !copied.ok && work.link && <span className="pp-copy-manual">
           <span className="project-muted">Скопируйте ссылку вручную:</span>
@@ -707,9 +740,10 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
   </section>;
 }
 
-function EditWorkForm({ work, capacity, edit, setEdit, onCancel, onSave }: {
-  work: Work; capacity: QuarterDirectionCapacity | undefined; edit: EditState; setEdit: (edit: EditState) => void;
-  onCancel: () => void; onSave: (patch: Pick<Work, "name" | "estimateHours" | "link" | "comment">) => void;
+/** «Отмена» drops the change on purpose; Esc only closes the form and keeps it (R-001). */
+function EditWorkForm({ work, capacity, edit, setEdit, onClose, onCancel, onSave }: {
+  work: Work; capacity: QuarterDirectionCapacity | undefined; edit: WorkEdit; setEdit: (edit: WorkEdit) => void;
+  onClose: () => void; onCancel: () => void; onSave: (patch: Pick<Work, "name" | "estimateHours" | "link" | "comment">) => void;
 }) {
   const errors = checkWork(edit);
   const shown = (field: keyof FieldErrors) => edit.tried || field === "estimate" || field === "link" ? errors[field] : undefined;
@@ -726,7 +760,7 @@ function EditWorkForm({ work, capacity, edit, setEdit, onCancel, onSave }: {
   }
   const onKey = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Enter" && !event.shiftKey && isTextField(event.target)) { event.preventDefault(); submit(); }
-    else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(); }
+    else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); }
   };
   return <section className="pp-form inline" data-form="edit" aria-label={`Изменить работу «${work.name}»`} onKeyDown={onKey}>
     <div className="pp-form-row">
