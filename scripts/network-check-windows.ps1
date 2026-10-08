@@ -10,7 +10,9 @@ passed to that process alone (WEBVIEW2_USER_DATA_FOLDER replaces the app profile
 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS is appended to the app's own arguments):
   control - fresh profile; CSP is bypassed through CDP and the page POSTs a control marker to
             https://example.com. The summary must find it, otherwise the method is broken.
-  fresh   - fresh profile; webview-smoke and report-export-smoke with marker data.
+  fresh   - fresh profile; webview-smoke and report-export-smoke with marker data; with
+            -DemoDir (or the demo archive of -Tag, 0.4.0-alpha.2 and later) also planner-smoke:
+            the quarter planner and the paste of works from the real clipboard.
   warm    - the same profile again; webview-smoke with marker data.
 NetLog runs in capture mode Everything with QUIC disabled (QUIC content cannot be read). All
 logs stay under src-tauri\target; only summaries are printed. TCP connections of the whole
@@ -20,6 +22,7 @@ process tree are sampled once a second.
 param(
     [string]$Tag = 'v0.1.0',
     [string]$ZipPath,
+    [string]$DemoDir,
     [int]$Port = 19331
 )
 
@@ -47,6 +50,20 @@ $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ZipPath).Hash.ToLowe
 if ($expectedHash -ne $actualHash) { throw "SHA-256 of $ZipPath does not match its .sha256 file." }
 $appDir = Join-Path $work 'app'
 Expand-Archive -LiteralPath $ZipPath -DestinationPath $appDir
+
+# Demo projects of the same release, for planner-smoke (fictional data, 0.4.0-alpha.2 and later).
+if (-not $DemoDir -and $Tag -match '^v0\.4\.0-alpha\.(\d+)$' -and [int]$Matches[1] -ge 2) {
+    $version = $Tag.TrimStart('v')
+    $demoName = "Capacity-Planner-$version-demo-projects"
+    $demoZip = Join-Path $work "$demoName.zip"
+    $base = "https://github.com/Samoiloff90/capacity-manager/releases/download/$Tag"
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$demoName.zip" -OutFile $demoZip
+    Invoke-WebRequest -UseBasicParsing -Uri "$base/$demoName.zip.sha256" -OutFile "$demoZip.sha256"
+    $demoExpected = ((Get-Content -LiteralPath "$demoZip.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+    if ($demoExpected -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $demoZip).Hash.ToLowerInvariant()) { throw "SHA-256 of $demoZip does not match." }
+    Expand-Archive -LiteralPath $demoZip -DestinationPath (Join-Path $work 'demo')
+    $DemoDir = Join-Path (Join-Path $work 'demo') $demoName
+}
 $exe = Join-Path $appDir 'capacity-planner.exe'
 
 # --- Markers (ASCII and Cyrillic; built from code points to keep this file ASCII) -------------
@@ -182,6 +199,8 @@ $results += Get-Summary $app $forced
 $profileDir = Join-Path $work 'profile'
 $env:CAPACITY_SMOKE_MARKER = "$asciiMarker $cyrillicMarker"
 $app = Start-App 'fresh' $profileDir
+# planner-smoke starts and ends on the welcome screen, so it goes first.
+if ($DemoDir) { Invoke-Node @('scripts/planner-smoke.mjs', "$Port", $DemoDir) }
 Invoke-Node @('scripts/webview-smoke.mjs', "$Port")
 $exportFrom = Get-Date
 Invoke-Node @('scripts/report-export-smoke.mjs', "$Port")
@@ -208,6 +227,7 @@ $leaks = @($results | Where-Object { $_.run -ne 'control' } | ForEach-Object { $
 $verdict = [ordered]@{
     tag               = $Tag
     zipSha256         = $actualHash
+    plannerSmoke      = [bool]$DemoDir
     controlMarkerFound = $controlFound
     markerLeaks       = $leaks
     passed            = $controlFound -and -not $leaks.Count

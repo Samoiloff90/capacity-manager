@@ -342,6 +342,10 @@ jobs:
           rm -rf "$base" "$out" && mkdir -p "$base/$name" "$out"
           CAPACITY_DEMO_OUT="$base/$name" bash scripts/ci-run.sh demo-projects \
             cargo test --manifest-path src-tauri/Cargo.toml --locked --lib write_demo_projects -- --ignored --exact project_store::tests::write_demo_projects
+          # The made-up list of works for «Вставить из таблицы» (DEC-050), written and checked by its test.
+          CAPACITY_TEMPLATE_OUT="$base/$name/Import-template.xlsx" bash scripts/ci-run.sh import-template \
+            npx vitest run tests/import-template.test.ts
+          test -s "$base/$name/Import-template.xlsx"
           cp packaging/demo/README.txt "$base/$name/README.txt"
           ( cd "$base" && ditto -c -k --keepParent "$name" "$out/$name.zip" )
           ( cd "$out" && shasum -a 256 "$name.zip" > "$name.zip.sha256" && cat "$name.zip.sha256" )
