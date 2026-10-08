@@ -220,6 +220,30 @@
   вставки не сохранял. Теперь флаг ставится и снимается сразу;
 - «1,200» читалось бы как 1,2 ч — теперь ошибка с просьбой уточнить.
 
+### GitHub Actions
+
+Запуск ветки на коммите `c9c140b`:
+<https://github.com/Samoiloff90/capacity-manager/actions/runs/37735968092> — оба job и проверка
+файлов релиза PASS.
+- macOS arm64 (runner macOS 26.6.2): `Capacity Planner Alpha.app`, `local.capacity-planner.alpha`,
+  0.4.0-alpha.2, arm64, ad-hoc подпись, без нотаризации; .dmg собран, копия .app внутри прошла
+  `codesign --verify`; наблюдение за сетью соединений не нашло; Vitest, Rust-тесты, учебные
+  проекты и шаблон `Import-template.xlsx` записаны на macOS.
+- Windows x64: EXE, portable ZIP, Vitest, TypeScript, Rust-тесты.
+
+### Pre-release
+
+- Тег `v0.4.0-alpha.2` на коммите `c9c140b`; запуск тега:
+  <https://github.com/Samoiloff90/capacity-manager/actions/runs/37737133653> — PASS.
+- Релиз <https://github.com/Samoiloff90/capacity-manager/releases/tag/v0.4.0-alpha.2>:
+  pre-release, не «последний». Файлы: .dmg и ZIP для macOS arm64, учебные проекты с шаблоном
+  `Import-template.xlsx`, portable ZIP для Windows, скрипт наблюдения за сетью, контрольные
+  суммы. SHA-256 .dmg — `9c91a847fa3f337d7a2c04e7a4a3f5f4cdef1d11d0a52822b76865f1c6b93f6e`.
+- Файлы скачаны без входа, контрольные суммы сошлись.
+- Проверка сети на ZIP релиза (NETWORK_CHECK.md): маркеров в трафике нет, у приложения своих
+  внешних соединений нет; внутри неё `planner-smoke` на EXE и учебных проектах из релиза —
+  29 шагов через настоящий буфер обмена Windows.
+
 ### Независимое ревью
 
 Отдельный агент проверил изменения по UX, правилам AGENTS.md и DEC-039/DEC-043/DEC-050 и
@@ -248,5 +272,5 @@
   «Скопировать пропущенные», ⌘↩ и Esc в окне вставки, установка поверх alpha.1 —
   чек-лист в ../releases/v0.4.0-alpha.2.md.
 - Вставка из Google Таблиц и Numbers проверена только на тексте в их формате, не из самих
-  программ.
+  программ; из Excel — на тексте в формате буфера Excel, сам Excel на Windows не запускался.
 - Экранный диктор.
