@@ -36,7 +36,7 @@
 
 ## Главные документы
 
-Текущая фаза: ручной квартальный сценарий с задачами и отчёт XLSX (DEC-024) реализованы; DEC-021 разрешает независимую проверку расчётов и пробную Windows-поставку. 460 тестов Vitest, 46 Rust-тестов и release build проходят (версия 0.3.0: DEC-027, DEC-028). Сборки macOS arm64 (.app) и Windows (portable ZIP) идут в GitHub Actions (этап 3): оба job зелёные, .app запускается на Mac-раннере, тесты проходят и на macOS (`docs/audit/MACOS_BUILD.md`). Релизы — по тегу `vX.Y.Z` только по команде PO (DEC-025, README «Выпуск релиза»). Проверка сети (этап 4) — `docs/audit/NETWORK_CHECK.md`. На Mac PO приложение ещё не запускалось. DEC-023 определил целевые ОС (Windows 10/11 x64, macOS arm64) и уточнил REQ-002: фоновые обращения WebView2/WKWebView допустимы, приложение не должно передавать данные команды. Проверка версий 0.1.0, 0.2.0 и 0.3.0 на Windows: маркеры в трафике не найдены; одно соединение движка с Microsoft вне NetLog не проверено по содержимому. На Mac — только простой на раннере без соединений; сценарий на Mac PO не проверен. Факты и ограничения — `docs/audit/CALCULATION_ACCEPTANCE.md`, `docs/audit/WINDOWS_PORTABLE.md`, `docs/audit/REPORT_EXPORT.md` и `docs/audit/MACOS_BUILD.md`.
+Текущая фаза: ручной квартальный сценарий с задачами и отчёт XLSX (DEC-024) реализованы; DEC-021 разрешает независимую проверку расчётов и пробную Windows-поставку. 460 тестов Vitest, 46 Rust-тестов и release build проходят (версия 0.3.0: DEC-027, DEC-028). Сборки macOS arm64 (.app) и Windows (portable ZIP) идут в GitHub Actions (этап 3): оба job зелёные, .app запускается на Mac-раннере, тесты проходят и на macOS (`docs/audit/MACOS_BUILD.md`). Релизы — по тегу `vX.Y.Z` только по команде PO (DEC-025, README «Выпуск релиза»). Проверка сети (этап 4) — `docs/audit/NETWORK_CHECK.md`. На Mac PO тестовую 0.4.0-alpha.1 PO кратко проверил сам: работает ожидаемо, весь чек-лист не пройден (DEC-050). DEC-023 определил целевые ОС (Windows 10/11 x64, macOS arm64) и уточнил REQ-002: фоновые обращения WebView2/WKWebView допустимы, приложение не должно передавать данные команды. Проверка версий 0.1.0, 0.2.0 и 0.3.0 на Windows: маркеры в трафике не найдены; одно соединение движка с Microsoft вне NetLog не проверено по содержимому. На Mac — только простой на раннере без соединений; сценарий на Mac PO не проверен. Факты и ограничения — `docs/audit/CALCULATION_ACCEPTANCE.md`, `docs/audit/WINDOWS_PORTABLE.md`, `docs/audit/REPORT_EXPORT.md` и `docs/audit/MACOS_BUILD.md`.
 
 1. Прямые решения Product Owner; подтверждённые требования фиксируются в `docs/product/REQUIREMENTS.md`.
    `docs/product/MVP.md` — согласованная первая версия и критерии приёмки.
@@ -47,7 +47,11 @@
    `docs/product/QUARTER_PLANNING_UX.md`, технический план —
    `docs/architecture/QUARTER_PLANNING_PLAN.md`. Реализация идёт по этапам плана в
    ветке `quarter-planner`: этапы 1–4 выполнены, промежуточная сборка 0.4.0-alpha.1 —
-   DEC-049 (`docs/audit/QUARTER_PLANNER_BUILD.md`). Обычный push этой ветки разрешён;
+   DEC-049; вставка работ из таблицы (этап 5а), справка по компетенциям и разгрузка вкладки
+   квартала — 0.4.0-alpha.2, DEC-050 (`docs/audit/QUARTER_PLANNER_BUILD.md`). Загрузка
+   .xlsx (этап 5б) — после «ок» PO на объём. Kaiten (DEC-051) и ИИ (DEC-052) — пока только
+   исследования в `docs/research/`; без отдельного согласования не подключать.
+   Обычный push этой ветки разрешён;
    force-push, слияние и push в `main`, выпуск стабильной версии — только по команде PO.
    Не меняй код и поведение приложения по этой концепции без «ок» PO.
 2. `docs/system/MODEL.md` и `docs/architecture/LOCAL_PROJECTS.md` — принятый подход; фактическую готовность подтверждай результатами проверок, а не наличием архитектурного решения.
