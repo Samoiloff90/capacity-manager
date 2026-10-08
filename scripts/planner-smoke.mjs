@@ -1,4 +1,4 @@
-// Development-only end-to-end check of the quarter planner (stages 2–4) against a running EXE.
+// Development-only end-to-end check of the quarter planner (stages 2–5) against a running EXE.
 // The caller starts the EXE with a fresh WebView2 profile and --remote-debugging-port=<port>
 // (WEBVIEW2_USER_DATA_FOLDER, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS) and stops it afterwards.
 //   node --experimental-websocket scripts/planner-smoke.mjs <port> <demo dir>
@@ -6,7 +6,10 @@
 // write_demo_projects -- --ignored, CAPACITY_DEMO_OUT): Alpha-new-format and Beta-format-0.3.0.
 // Copies are made under src-tauri/target/planner-smoke-<time>; the demo folders are not opened.
 // Only the folder picker is replaced. Project files, SQL, the calculation and the UI are real.
+// Section D puts the fictional import template (tests/fixtures/import-template.ts) on the real
+// Windows clipboard and pastes it with Ctrl+V into the running app.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { cp, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
@@ -95,6 +98,93 @@ async function key(selector, keyName, extra = {}) {
 const saveShortcut = () => evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true }))`);
 const status = () => textOf(".project-status");
 
+/** The real Windows clipboard: the app reads it on Ctrl+V and writes it on «Скопировать пропущенные». */
+async function setClipboard(text) {
+  const file = join(root, "clipboard.txt");
+  await writeFile(file, text, "utf8");
+  // Another program may hold the clipboard for a moment: try again before giving up.
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    try {
+      execFileSync("powershell.exe", ["-NoProfile", "-Command", `Get-Content -Raw -Encoding UTF8 -LiteralPath '${file}' | Set-Clipboard`], { stdio: "pipe" });
+      return true;
+    } catch {
+      await new Promise((accept) => setTimeout(accept, 500));
+    }
+  }
+  return false;
+}
+function getClipboard() {
+  try {
+    return execFileSync("powershell.exe", ["-NoProfile", "-Command", "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Clipboard -Raw"], { encoding: "utf8", stdio: "pipe" });
+  } catch {
+    return null;
+  }
+}
+/**
+ * Ctrl+V as the browser engine runs it: the paste command reads the system clipboard. If the
+ * clipboard of this computer is held by another program, the same text arrives in a paste
+ * event of the page instead, and the result says so (pasteModes).
+ */
+async function paste(selector, text) {
+  await waitFor(`Boolean(document.querySelector(${js(selector)}))`, selector);
+  await evaluate(`document.querySelector(${js(selector)}).focus()`);
+  if (await setClipboard(text)) {
+    const keyV = { key: "v", code: "KeyV", windowsVirtualKeyCode: 86, modifiers: 2 };
+    await cdp("Input.dispatchKeyEvent", { type: "rawKeyDown", ...keyV, commands: ["paste"] });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", ...keyV });
+    result.pasteModes.push("system clipboard");
+    return;
+  }
+  await evaluate(`(() => { const data = new DataTransfer(); data.setData('text/plain', ${js(text)});
+    document.activeElement.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); })()`);
+  result.pasteModes.push("paste event (the system clipboard was busy)");
+}
+/** A click with the mouse, so the page gets a user gesture (the clipboard needs one). */
+async function mouseClick(selector) {
+  await waitFor(`(() => { const e = document.querySelector(${js(selector)}); return Boolean(e) && !e.matches(':disabled'); })()`, selector);
+  const { x, y } = await evaluate(`(() => { const e = document.querySelector(${js(selector)}); e.scrollIntoView({ block: 'center' });
+    const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  for (const type of ["mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+}
+/** Chooses an option of a select as a person would: the native setter and a change event. */
+async function choose(selector, value) {
+  await waitFor(`Boolean(document.querySelector(${js(selector)}))`, selector);
+  await evaluate(`(() => { const select = document.querySelector(${js(selector)});
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, ${js(value)});
+    select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+}
+/** The import template of tests/fixtures/import-template.ts as Excel copies it. */
+const card = (number) => `https://kaiten.example.com/space/12/card/${number}`;
+const TEMPLATE = [
+  ["Название", "Оценка, ч", "Ссылка на Kaiten", "Комментарий", "Источник"],
+  ["Отчёт по возвратам", "28", card(201), "", "Запросы УИ"],
+  ["Справочник складов", "12,5", "", "Нужна выгрузка из учётной системы", "Запросы УИ"],
+  ["Интеграция с CRM", "M", card(203), "", "Продукт «Витрина»"],
+  ["Оплата частями", "2-3 дня", "", "", "Продукт «Витрина»"],
+  ["Проверка журналов ошибок", "0", "", "Основную часть сделала другая команда", "Техдолг"],
+  ["Офлайн-режим", "", "", "Оценка после исследования", "Мобильное приложение"],
+  ["Корзина: промокоды", "280", card(102), "", "Продукт «Витрина»"],
+  ["Отчёт по возвратам", "28", card(201), "", "Запросы УИ"],
+  ["Баннеры на главной", "40", "", "", "Маркетинг"],
+  ["", "16", "", "Название забыли", "Техдолг"],
+  ["Тёмная тема", "30", "", "", "Мобильное приложение"],
+  ["Права доступа для отдела кадров", "100", "", "Новая оценка заказчика", "Запросы УИ"],
+  ["Мониторинг ошибок", "1 200", "kaiten.example.com/card/207", "Две строки\nв одной ячейке", "Техдолг"],
+  ["Встречи с заказчиком", "20", "", "", "Встречи и ритуалы"]
+];
+const tableText = (table) => table.map((row) => row.map((cell) => /[\t\r\n"]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell).join("\t")).join("\r\n") + "\r\n";
+/** One row of the import preview: tick, line, the four fields, the source and the check text. */
+const importRow = (line) => evaluate(`(() => {
+  const row = document.querySelector('.pp-import-table tr[data-line="${line}"]');
+  if (!row) return null;
+  const value = (selector) => row.querySelector(selector)?.value ?? null;
+  return { checked: row.querySelector('input[type=checkbox]').checked, blocked: row.querySelector('input[type=checkbox]').disabled,
+    name: value('input[id^=import-name]'), estimate: value('input[id^=import-estimate]'), link: value('input[id^=import-link]'),
+    comment: value('input[id^=import-comment]'), source: row.querySelector('select')?.selectedOptions[0]?.textContent ?? null,
+    check: row.querySelector('.pp-import-issues').textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim() };
+})()`);
+const rowInput = (line, field) => `.pp-import-table tr[data-line="${line}"] [id^="import-${field}-"]`;
+
 async function pickFolder(folder) {
   await evaluate(`(() => {
     window.__plannerRestore?.();
@@ -165,11 +255,11 @@ async function rows(sessionKey) {
 }
 
 const root = join(target, `planner-smoke-${Date.now()}`);
-const result = { root, steps, passed: false };
+const result = { root, steps, passed: false, pasteModes: [] };
 try {
   await cdp("Runtime.enable");
   await waitFor("Boolean(document.querySelector('.project-welcome'))", "fresh EXE on the welcome screen");
-  assert.match(await textOf(".project-preview-note"), /^Тестовая версия 0\.4\.0-alpha\.1 с новым форматом проектов/);
+  assert.match(await textOf(".project-preview-note"), /^Тестовая версия 0\.4\.0-alpha\.\d+ с новым форматом проектов/);
   await mkdir(root);
 
   // A. The fictional demo project in the new format: the PO's control example of DEC-041.
@@ -178,7 +268,7 @@ try {
   await openProject(alpha);
   step("demo project opened on «План квартала»");
   assert.equal(await textOf(".project-tabs [aria-selected=true]"), "План квартала");
-  assert.match(await textOf(".project-topbar .project-chip.preview"), /^Тестовая версия 0\.4\.0-alpha\.1$/);
+  assert.match(await textOf(".project-topbar .project-chip.preview"), /^Тестовая версия 0\.4\.0-alpha\.\d+$/);
   assert.deepEqual(await totals(), {
     "Доступно команде": "2 000 ч", "Резерв на встречи": "344,80 ч", "Занято работами": "не менее 980 ч",
     "Остатки квот": "не более 390 ч", "Не распределено": "305,20 ч"
@@ -489,6 +579,137 @@ try {
   assert.deepEqual((await readdir(beta)).filter((name) => name !== ".capacity.lock").sort(), ["capacity-backup-format1-" + basename(backup).slice(24), "capacity.sqlite"].sort());
   await closeProject();
   step("project of 0.3.0: opened unchanged; first save asked, made a byte-identical backup, upgraded; the edit survives reopening");
+
+  // D. Works from a spreadsheet (stage 5, DEC-050): the template pasted with Ctrl+V, fixed in the
+  // preview, added on review; repeats and errors are not added; «Отменить вставку».
+  const importing = join(root, "Alpha-import");
+  await cp(join(demo, "Alpha-new-format"), importing, { recursive: true });
+  await openProject(importing);
+  await openSource("Запросы УИ");
+  await click("Добавить работу");
+  await paste("#add-name", tableText(TEMPLATE));
+  await waitFor("Boolean(document.querySelector('#import-title'))", "rows pasted into «Название» open the import");
+  assert.equal(await evaluate("document.querySelector('#add-name').value"), "", "the rows did not land in the name field");
+  assert.equal(await textOf(".pp-import-bar > span:first-child"), "14 строк · отмечено 5 · с ошибками 6 · повторов 3");
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.pp-import-columns label:not(.pp-import-default) select'), s => s.value)"), ["name", "estimate", "link", "comment", "source"]);
+  assert.deepEqual(await importRow(2), { checked: true, blocked: false, name: "Отчёт по возвратам", estimate: "28", link: card(201), comment: "", source: "Запросы УИ", check: "Готово к добавлению" });
+  assert.equal((await importRow(4)).check, "«M» — размер, а нужны часы. Размеры в часы не переводятся.Добавить без оценки");
+  assert.equal((await importRow(7)).check, "Без оценки.");
+  assert.equal((await importRow(6)).estimate, "0");
+  assert.equal((await importRow(8)).check, "Повтор. Ссылка уже есть у работы «Корзина: промокоды» («Продукт «Витрина»», в плане квартала).");
+  assert.equal((await importRow(9)).check, "Повтор. Та же ссылка, что в строке 2.");
+  assert.deepEqual([(await importRow(10)).blocked, (await importRow(10)).source], [true, "«Маркетинг» — нет такого"]);
+  assert.equal((await importRow(14)).comment, "Две строки в одной ячейке", "a line break inside a cell becomes a space");
+  assert.equal((await importRow(14)).estimate, "1 200");
+  step("rows from the real clipboard pasted into «Название»: 14 rows, header and columns found, errors, repeats and 0 h shown");
+
+  await saveShortcut();
+  await waitFor("Boolean(document.querySelector('.pp-import .pp-hintline'))", "hint instead of saving");
+  assert.equal(await status(), "Все изменения сохранены");
+  await click("Добавить без оценки", "document.querySelector('.pp-import-table tr[data-line=\"4\"]')");
+  await waitFor(`document.querySelector(${js(rowInput(4, "comment"))})?.value === 'исходная оценка: M'`, "size kept in the comment");
+  assert.equal((await importRow(4)).estimate, "");
+  await type(rowInput(5, "estimate"), "24");
+  await choose(rowInput(10, "source"), "src-product");
+  await type(rowInput(11, "name"), "Профилирование сборки");
+  await type(rowInput(14, "link"), card(207));
+  await evaluate("document.querySelector('.pp-import-table tr[data-line=\"13\"] input[type=checkbox]').click()");
+  for (const line of [4, 5, 10, 11, 14]) assert.equal((await importRow(line)).checked, true, `line ${line} fixed`);
+  assert.equal((await importRow(13)).checked, false);
+  assert.equal((await importRow(15)).blocked, true);
+  assert.equal(await textOf(".pp-import-bar > span:first-child"), "14 строк · отмечено 9 · с ошибками 1 · повторов 3");
+  step("fixed in the preview: «Добавить без оценки», hours instead of a duration, an existing source, a name, a link; one row unticked");
+
+  await clickSelector("input[name=import-mark]:not(:checked)");
+  await waitFor("document.querySelector('#import-submit')?.textContent === 'Добавить 9 работ в план квартала'", "plan mode");
+  const planEffects = await texts(".pp-import-effects li");
+  assert(planEffects.includes("«Запросы УИ»: 2 работы: 40,50 ч. Остаток квоты станет 9,50 ч (сейчас остаток 50 ч)."), planEffects.join(" | "));
+  assert(planEffects.some((line) => line.startsWith("«Мобильное приложение»: 1 работа: 1 без оценки. Перебор квоты останется не менее 20 ч.")), planEffects.join(" | "));
+  await clickSelector("input[name=import-mark]:not(:checked)");
+  await waitFor("document.querySelector('#import-submit')?.textContent === 'Добавить 9 работ на рассмотрение'", "back on review");
+  assert((await texts(".pp-import-effects li")).includes("«Запросы УИ»: 2 работы: 40,50 ч. Если включить их в план квартала: Остаток квоты станет 9,50 ч (сейчас остаток 50 ч)."));
+  step("«Куда добавить»: the plan shows each source's consequence (9,50 ч left in «Запросы УИ»); the import goes on review");
+
+  await key(null, "Enter", { ctrlKey: true });
+  await waitFor("Boolean(document.querySelector('#import-done'))", "result of a partial add");
+  assert.equal(plain(await textOf(".pp-import .pp-modal-body > p")), "Добавлено на рассмотрение: 9 работ. Не добавлено: 5 строк. Пропущенные строки остаются в этом окне, пока открыт проект.");
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Пропущенные строки\"] tbody tr'), r => r.cells[0].textContent)"), ["8", "9", "12", "13", "15"]);
+  await mouseClick("#import-copy-skipped");
+  await waitFor("Boolean(document.querySelector('.pp-import .pp-hintline') || document.querySelector('.pp-import textarea[readonly]'))", "copied or offered for manual copy");
+  const copiedText = await evaluate("document.querySelector('.pp-import textarea[readonly]') ? null : 'clipboard'");
+  const fromClipboard = copiedText ? getClipboard() : null;
+  if (copiedText && fromClipboard === null) result.skippedCopy = "copied by the app; the system clipboard could not be read back";
+  const skippedText = copiedText ? fromClipboard : await evaluate("document.querySelector('.pp-import textarea[readonly]').value");
+  // When the system clipboard cannot be read back, the app still said «скопированы»: only that is checked.
+  if (skippedText !== null) {
+    const skipped = skippedText.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n").map((line) => line.split("\t"));
+    assert.deepEqual(skipped[0], ["Название", "Оценка, ч", "Ссылка на Kaiten", "Комментарий", "Источник", "Причина пропуска"]);
+    assert.deepEqual(skipped.map((row) => row[0]), ["Название", "Корзина: промокоды", "Отчёт по возвратам", "Тёмная тема", "Права доступа для отдела кадров", "Встречи с заказчиком"]);
+  }
+  result.skippedCopy ??= copiedText ? "system clipboard" : "manual copy field";
+  await click("Готово");
+  await waitFor("!document.querySelector('#import-title')", "import window closed");
+  await waitFor("document.activeElement?.id === 'add-name'", "focus back in the field the rows were pasted into");
+  assert.deepEqual(await head(), ["250 ч", "200 ч", "50 ч"], "works on review take no budget");
+  assert.equal(await textOf("#btn-import"), "Продолжить вставку (5)");
+  assert.deepEqual(await texts(".pp-import-line .pp-ghost"), ["Вставлено из таблицы: 9 работ на рассмотрение — в «Продукт «Витрина»», «Запросы УИ», «Мобильное приложение», «Техдолг».Отменить вставку"]);
+  assert.equal(plain(await evaluate(`${workRow("Отчёт по возвратам")}.querySelector('.pp-effect').textContent`)), "После включения работы на 28 ч в плане будет 228 ч, останется 22 ч.");
+  step(`added 9 works on review, 5 rows left with reasons and copied with the header (${result.skippedCopy}); budget unchanged`);
+
+  await evaluate(`${workRow("Отчёт по возвратам")}.querySelector('.pp-action').click()`);
+  await waitFor(`(${workRow("Отчёт по возвратам")})?.classList.contains('plan')`, "included");
+  assert.deepEqual(await head(), ["250 ч", "228 ч", "22 ч"]);
+  await clickSelector("#import-undo");
+  await waitFor("Boolean(document.querySelector('#import-undo-confirm'))", "the undo asks first");
+  assert.match(await textOf(".pp-import-line .project-message"), /^Работы этой вставки уже меняли: «Отчёт по возвратам» — включена в план квартала\. Отменить вставку всё равно\? Будут удалены все 9 работ этой вставки\./);
+  await click("Не отменять");
+  await waitFor("!document.querySelector('#import-undo-confirm')", "kept");
+  await waitFor("document.activeElement?.id === 'import-undo'", "focus back on «Отменить вставку»");
+  step("a work of the import included in the plan: 228 / 22 ч (DEC-041); «Отменить вставку» names it first, «Не отменять» keeps all");
+
+  await openSource("Техдолг");
+  await clickSelector("#btn-import");
+  await waitFor("document.activeElement?.id === 'import-text'", "paste field");
+  await paste("#import-text", "Обновление сертификатов\t6\r\n");
+  await waitFor("document.querySelector('#import-submit')?.textContent === 'Добавить 1 работу на рассмотрение'", "one row ready");
+  await clickSelector("#import-submit");
+  await waitFor("!document.querySelector('#import-title')", "everything added: the window closed");
+  // The page is active again at once, so Ctrl+S right after the window saves.
+  assert.equal(await evaluate("document.querySelector('.project-page').inert"), false);
+  assert(await evaluate(`Boolean(${workRow("Обновление сертификатов")})`));
+  await menu("Обновление библиотек", "Перенести в «Не в этом квартале»");
+  await clickSelector("#import-undo");
+  await waitFor(`!${workRow("Обновление сертификатов")}`, "the import undone after another action");
+  assert((await texts(".pp-ghost")).some((line) => line.startsWith("Вставка отменена: удалено 1 работа.")), "the undo is confirmed");
+  assert.equal(await evaluate(`${workRow("Обновление библиотек")}?.closest('.pp-works') ? 'kept' : 'gone'`), "kept");
+  step("«Отменить вставку» removed only the work of that import, after another action");
+
+  await saveShortcut();
+  try {
+    await waitFor("document.querySelector('.project-status')?.textContent === 'Все изменения сохранены'", "saved", 8000);
+  } catch (error) {
+    throw new Error(`${error.message}: ${await status()} | ${(await texts(".project-message, .pp-hintline")).join(" | ")} | inert ${await evaluate("document.querySelector('.project-page').inert")}`);
+  }
+  const importSession = await evaluate("window.__plannerSession?.sessionKey");
+  const importRows = await rows(importSession);
+  const tasks = importRows[0].payload.tasks;
+  assert.equal(tasks.length, 12 + 9);
+  const byName = (name) => tasks.find((task) => task.name === name);
+  assert.deepEqual([byName("Интеграция с CRM").estimateHours, byName("Интеграция с CRM").comment, byName("Интеграция с CRM").link], [null, "исходная оценка: M", card(203)]);
+  assert.deepEqual([byName("Проверка журналов ошибок").estimateHours, byName("Офлайн-режим").estimateHours, byName("Оплата частями").estimateHours], ["0", null, "24"]);
+  assert.deepEqual([byName("Отчёт по возвратам").mark, byName("Справочник складов").estimateHours, byName("Мониторинг ошибок").estimateHours], ["plan", "12.5", "1200"]);
+  assert.equal(byName("Баннеры на главной").directionId, "src-product");
+  assert.equal(tasks.filter((task) => task.name === "Тёмная тема").length, 1, "a repeat was not added");
+  assert.equal(tasks.filter((task) => task.name === "Права доступа для отдела кадров").length, 1, "an unticked row was not added; the work was not replaced");
+  assert.equal(byName("Права доступа для отдела кадров").estimateHours, "80");
+  const lostRows = await closeProject("Не сохранять");
+  assert.match(plain(lostRows), /«Запросы УИ», 1 квартал 2027 года: строки из таблицы, ещё не добавленные: 5/);
+  await openProject(importing);
+  await openSource("Запросы УИ");
+  assert.deepEqual(await head(), ["250 ч", "228 ч", "22 ч"]);
+  assert.equal(await textOf("#btn-import"), "Вставить из таблицы");
+  await closeProject();
+  step("saved: 21 works, 0 h ≠ no estimate, the size in the comment, nothing replaced; closing named the 5 waiting rows; reopened 228 / 22 ч");
 
   assert.deepEqual(consoleErrors, [], "errors in the page console");
   result.passed = true;

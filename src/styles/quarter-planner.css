@@ -201,5 +201,49 @@
   .pp-num + .pp-num { border-left: 0; border-top: 1px solid #e7edf5; padding: 10px 0 0; }
   .pp-form-row, .pp-form-row.second { grid-template-columns: 1fr; }
 }
+
+/* Works from a spreadsheet (DEC-050): a wide window with a preview the user can fix in place. */
+.project-modal.pp-mid.pp-import { max-width: 1240px; }
+.pp-import .pp-modal-head { padding-bottom: 12px; }
+.pp-import .pp-modal-head .project-message { margin: 10px 0 0; }
+.pp-import .pp-modal-body { padding-top: 12px; }
+.pp-import-paste { display: grid; font-weight: 600; gap: 6px; margin-top: 12px; }
+.pp-import-paste textarea { font: inherit; font-weight: 400; min-height: 140px; resize: vertical; width: 100%; }
+.pp-import-bar { align-items: center; display: flex; flex-wrap: wrap; font-size: 14px; gap: 6px 18px; margin-bottom: 8px; }
+.project-app .pp-check { align-items: center; color: #344054; display: inline-flex; font-size: 14px; gap: 6px; }
+.project-app .pp-import-bar .project-link-button { font-size: 14px; min-height: 28px; }
+.pp-import-restart { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.pp-import-columns { align-items: center; display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 10px; }
+.pp-import-columns .pp-legend { margin: 0; }
+.project-app .pp-import-columns label { align-items: center; color: #344054; display: inline-flex; font-size: 13px; gap: 6px; }
+.project-app .pp-import-columns select, .project-app .pp-import-table select { font-size: 13px; min-height: 30px; }
+.pp-import-table table { table-layout: fixed; width: 100%; }
+.pp-import-table th, .pp-import-table td { font-size: 13px; padding: 6px 6px; vertical-align: top; }
+.pp-import-table th.pp-col-tick { width: 64px; }
+.pp-import-table th.pp-col-name { width: 22%; }
+.pp-import-table th.pp-col-est { width: 92px; }
+.pp-import-table th.pp-col-source { width: 14%; }
+.pp-import-table th.pp-col-check-text { width: 24%; }
+.project-app .pp-import-tick { align-items: center; color: #667085; cursor: pointer; display: inline-flex; font-variant-numeric: tabular-nums; gap: 6px; min-height: 30px; }
+.project-app .pp-import-tick input[type="checkbox"] { flex: none; min-width: 0; width: 17px; }
+.pp-col-line { color: #667085; font-variant-numeric: tabular-nums; width: 44px; }
+.project-app .pp-import-input { font-size: 13px; min-height: 30px; min-width: 0; padding: 4px 6px; width: 100%; }
+.project-app .pp-import-input[aria-invalid="true"], .project-app .pp-import-table select[aria-invalid="true"] { border-color: #b42318; box-shadow: inset 0 0 0 1px #b42318; }
+.project-app .pp-import-table select { width: 100%; }
+.pp-import-issues ul { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.pp-import-issues .pp-sign { align-items: flex-start; font-weight: 500; }
+.project-app .pp-import-issues .project-link-button { font-size: 13px; min-height: 24px; }
+.pp-import-table tr.pp-import-error td { background: #fdf6f6; }
+.pp-import-table tr.pp-import-off td { background: #fafbfd; }
+.pp-modal-foot.pp-import-foot { display: grid; gap: 8px; justify-content: stretch; }
+.pp-import-foot-row { align-items: center; display: flex; flex-wrap: wrap; gap: 10px 16px; justify-content: space-between; }
+.pp-import-mark { align-items: center; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.pp-import-mark .pp-legend { margin: 0; }
+.pp-import-effects { display: grid; font-size: 14px; gap: 2px; margin: 0; max-height: 4.8em; overflow: auto; padding-left: 18px; }
+.pp-import-h { font-size: 15px; margin: 14px 0 6px; }
+.pp-import-line { border: 1px solid #c9dbf9; border-radius: 8px; display: grid; margin-bottom: 12px; overflow: hidden; }
+.pp-import-line > .project-message { border-radius: 0; margin: 0; }
+.pp-import-line > .pp-ghost:last-child { border-bottom: 0; }
 .pp-toggle-row { align-items: center; background: #f7f9fc; border-top: 1px solid #dfe6f0; display: flex; padding-right: 12px; }
 .project-app .pp-toggle-row .pp-toggle { border-top: 0; flex: 1; width: auto; }
+.pp-import-foot .pp-effect-line { display: grid; gap: 4px; justify-items: start; }

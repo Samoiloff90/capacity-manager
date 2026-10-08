@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { useProjectWorkspace } from "./project-workspace";
 import { PROJECT_NAME_FORM, quarterTitle } from "./project-workspace-controller";
@@ -107,7 +107,7 @@ export default function ProjectApp() {
   // the cursor returns there after saving. The team-name form is saved by its own button.
   const saveFromKeyboard = useRef<() => void>(() => undefined);
   saveFromKeyboard.current = () => {
-    // Inside the reserve window Ctrl+S does not save: the window asks to finish with it first.
+    // Inside the reserve and import windows Ctrl+S does not save: the window asks to finish with it first.
     if (tabDialog || (creatingQuarter && state.project)) { setSaveHint((count) => count + 1); return; }
     if (disabled || state.confirmation || state.formatUpgrade || creatingQuarter || renaming || !state.draft || !state.dirty) return;
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
@@ -126,7 +126,7 @@ export default function ProjectApp() {
   }, []);
   const modalOpen = Boolean(state.confirmation) || Boolean(state.formatUpgrade) || (creatingQuarter && Boolean(state.project))
     || (helpOpen && Boolean(state.project)) || tabDialog;
-  useEffect(() => { page.current?.toggleAttribute("inert", modalOpen); }, [modalOpen]);
+  useLayoutEffect(() => { page.current?.toggleAttribute("inert", modalOpen); }, [modalOpen]);
 
   async function chooseProject(create: boolean) {
     setUiError("");
@@ -274,6 +274,9 @@ export default function ProjectApp() {
                 snapshot={state.draft} result={result} update={actions.updateDraft}
                 workInputs={state.workInputs} lastMarks={state.lastMarks}
                 setWorkInput={actions.setWorkInput} rememberMark={actions.rememberMark}
+                importDrafts={state.importDrafts} importBatches={state.importBatches} setImportDraft={actions.setImportDraft}
+                recordImportBatch={actions.recordImportBatch} forgetImportBatch={actions.forgetImportBatch}
+                saveHint={saveHint} onDialog={onTabDialog}
                 sourceId={planSource} onSourceChange={setPlanSource} onGoToTab={setTab} />}
             </section>
           </fieldset>

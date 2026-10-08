@@ -8,6 +8,8 @@ import {
   describeRestAfterInclusion, effectivePercent, fillPercent, formatPercent, parseEstimateInput, sameOnScreen, sourceState, ZERO_ESTIMATE_NOTE,
   type SourceState
 } from "../domain/capacity/source-plan";
+import { changedSinceImport, importDraftKey, pendingRowCount, removeImported, type ImportBatch, type ImportDraft } from "../import/work-import";
+import { ImportDialog, onNamePaste } from "./ImportDialog";
 import { isBlankWorkInput, workInputKey, type WorkInput } from "./project-workspace-controller";
 import { InfoHint } from "./project-ui";
 import { BackIcon, ChevronIcon, CloseIcon, DotsIcon, FillBar, hours, Kbd, Sign, TriangleIcon } from "./plan-ui";
@@ -35,11 +37,23 @@ export type PlanTabProps = {
   sourceId: string | null;
   onSourceChange: (sourceId: string | null) => void;
   onGoToTab: (tab: "team" | "absences" | "sources") => void;
+  importDrafts: Readonly<Record<string, ImportDraft>>;
+  importBatches: readonly ImportBatch[];
+  setImportDraft: (key: string, draft: ImportDraft | null) => void;
+  recordImportBatch: (batch: ImportBatch) => void;
+  forgetImportBatch: (id: string) => void;
+  /** Counts Ctrl+S pressed while a window of this tab is open: the window asks to finish first. */
+  saveHint: number;
+  onDialog: (open: boolean) => void;
 };
 
 /** One step of undo and the numbers before it (DEC-037: «было» — the last action). */
 type Undo = { tasks: Snapshot["tasks"]; sourceId: string };
 type Ghost = { sourceId: string; text: string; undo: boolean; at?: { mark: TaskMark; index: number } };
+/** The import window: opened from a source or from the table of sources (sourceId null). */
+type Importing = { sourceId: string | null; text: string | null };
+/** «Отменить вставку» waits for an answer when works of the import were changed since. */
+type ImportUndo = { batch: ImportBatch; changed: string[]; present: number };
 
 export function PlanTab(props: PlanTabProps) {
   const { snapshot, result, update, planId, sourceId } = props;
@@ -49,6 +63,13 @@ export function PlanTab(props: PlanTabProps) {
   const [fresh, setFresh] = useState<{ ids: string[]; label: string } | null>(null);
   const [added, setAdded] = useState<{ sourceId: string; text: string } | null>(null);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
+  const [importing, setImporting] = useState<Importing | null>(null);
+  const [importUndo, setImportUndo] = useState<ImportUndo | null>(null);
+  const { onDialog } = props;
+  // Said at once, not in an effect: Ctrl+S right after the window closes must save (ProjectApp).
+  const openImport = (sourceId: string | null, text: string | null = null) => { setImporting({ sourceId, text }); onDialog(true); };
+  const closeImport = () => { setImporting(null); onDialog(false); };
+  useEffect(() => () => onDialog(false), [onDialog]);
 
   // Focus after the next render: a work row, a form field or a heading.
   useLayoutEffect(() => {
@@ -62,8 +83,48 @@ export function PlanTab(props: PlanTabProps) {
   useEffect(() => { if (sourceId && !source) props.onSourceChange(null); }, [sourceId, source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function clearTransient() {
-    setUndo(null); setGhost(null); setBefore(null); setFresh(null); setAdded(null);
+    setUndo(null); setGhost(null); setBefore(null); setFresh(null); setAdded(null); setImportUndo(null);
   }
+
+  /** Works added from a spreadsheet; the single-step undo would bring them back, so it is dropped. */
+  function addImported(at: Importing, list: Work[], rest: ImportDraft | null) {
+    const key = importDraftKey(planId, at.sourceId);
+    const previous = source ? result?.directions.find((row) => row.directionId === source.id) : undefined;
+    clearTransient();
+    if (source && previous) setBefore({ sourceId: source.id, state: sourceState(previous) });
+    update((current) => ({ ...current, tasks: [...current.tasks, ...list] }));
+    if (list.length) props.recordImportBatch({ id: crypto.randomUUID(), planId, works: list, mark: list[0].mark === "plan" ? "plan" : "candidate", openedFrom: at.sourceId });
+    props.setImportDraft(key, rest);
+    setFresh({ ids: list.map((work) => work.id), label: "из таблицы" });
+    if (!rest) {
+      closeImport();
+      setFocusTarget(source ? "#btn-import" : "#overview-import");
+    }
+  }
+
+  /** «Отменить вставку»: only the works of that import, after other actions too (DEC-039). */
+  function undoImport(batch: ImportBatch, confirmed = false) {
+    const { present, changed } = changedSinceImport(batch, snapshot.tasks);
+    if (!present) { props.forgetImportBatch(batch.id); setImportUndo(null); return; }
+    if (changed.length && !confirmed) { setImportUndo({ batch, changed, present }); return; }
+    clearTransient();
+    update((current) => ({ ...current, tasks: removeImported(current.tasks, batch) }));
+    props.forgetImportBatch(batch.id);
+    setGhost({ sourceId: source?.id ?? "", text: `Вставка отменена: удалено ${present} ${pluralRu(present, "работа", "работы", "работ")}.`, undo: false });
+    // «Добавить работу» may be disabled while the form is open; this button never is.
+    setFocusTarget(source ? "#btn-import" : "#overview-import");
+  }
+
+  const importKey = importing ? importDraftKey(planId, importing.sourceId) : null;
+  const dialog = importing && importKey && <ImportDialog planId={planId} sourceId={importing.sourceId} quarter={props.quarter}
+    snapshot={snapshot} result={result} draft={props.importDrafts[importKey] ?? null} initialText={importing.text}
+    saveHint={props.saveHint} onDraft={(draft) => props.setImportDraft(importKey, draft)}
+    onAdd={(list, rest) => addImported(importing, list, rest)}
+    onClose={closeImport} />;
+  const importLine = <ImportLine planId={planId} sourceId={source?.id ?? null} snapshot={snapshot} batches={props.importBatches}
+    drafts={props.importDrafts} pending={importUndo} ghost={!source && ghost && !ghost.undo && ghost.sourceId === "" ? ghost.text : null}
+    onUndo={(batch, confirmed) => undoImport(batch, confirmed)} onKeep={() => { setImportUndo(null); setFocusTarget("#import-undo"); }}
+    onContinue={(sourceId) => openImport(sourceId)} />;
 
   /** Every change of works keeps one step of undo and the source's numbers before it. */
   function act(source: Direction, mutate: (tasks: Snapshot["tasks"]) => Snapshot["tasks"]) {
@@ -93,11 +154,51 @@ export function PlanTab(props: PlanTabProps) {
   }
 
   if (!snapshot.directions.length) return <Setup snapshot={snapshot} result={result} onGoToTab={props.onGoToTab} />;
-  if (!source) return <Overview {...props} onOpen={openSource} />;
+  if (!source) return <><Overview {...props} onOpen={openSource} onImport={() => openImport(null)} importLine={importLine} />{dialog}</>;
   const capacity = result?.directions.find((row) => row.directionId === source.id);
-  return <SourceWorkspace {...props} source={source} capacity={capacity} undo={undo} ghost={ghost} before={before} fresh={fresh}
+  return <><SourceWorkspace {...props} source={source} capacity={capacity} undo={undo} ghost={ghost} before={before} fresh={fresh}
     added={added} act={act} onUndo={undoLast} onOpen={openSource} setGhost={setGhost} setFresh={setFresh} setAdded={setAdded}
-    setFocusTarget={setFocusTarget} />;
+    setFocusTarget={setFocusTarget} onImport={(text) => openImport(source.id, text)} importLine={importLine} />{dialog}</>;
+}
+
+/**
+ * Under the source's numbers: the last import with «Отменить вставку», rows of an import still
+ * waiting, and the answer asked for when works of the import were changed since.
+ */
+function ImportLine({ planId, sourceId, snapshot, batches, drafts, pending, ghost, onUndo, onKeep, onContinue }: {
+  planId: string; sourceId: string | null; snapshot: Snapshot; batches: readonly ImportBatch[];
+  drafts: Readonly<Record<string, ImportDraft>>; pending: ImportUndo | null; ghost: string | null;
+  onUndo: (batch: ImportBatch, confirmed?: boolean) => void; onKeep: () => void; onContinue: (sourceId: string | null) => void;
+}) {
+  const ids = new Set(snapshot.tasks.map((task) => task.id));
+  // The import shows where it was started and in every source that got its works.
+  const batch = [...batches].reverse().find((item) => item.planId === planId && item.works.some((work) => ids.has(work.id))
+    && (sourceId === null || item.openedFrom === sourceId || item.works.some((work) => ids.has(work.id) && work.directionId === sourceId)));
+  // In a source the button says «Продолжить вставку (N)»; the table of sources lists them here.
+  const waiting = sourceId !== null ? [] : Object.entries(drafts).filter(([, draft]) => draft.planId === planId && pendingRowCount(draft) > 0);
+  if (!batch && !waiting.length && !pending && !ghost) return null;
+  const kept = batch ? batch.works.filter((work) => ids.has(work.id)) : [];
+  const present = kept.length;
+  const order = snapshot.directions.map((direction) => direction.id);
+  const targets = [...new Set(kept.map((work) => work.directionId))].sort((left, right) => order.indexOf(left) - order.indexOf(right));
+  const elsewhere = sourceId !== null && targets.some((id) => id !== sourceId)
+    ? ` — в ${targets.map((id) => `«${snapshot.directions.find((direction) => direction.id === id)?.name.trim() || "Без названия"}»`).join(", ")}` : "";
+  return <div className="pp-import-line">
+    {ghost && <div className="pp-ghost" role="status"><Sign tone="plain">{ghost}</Sign></div>}
+    {pending ? <div className="project-message warning" role="alert">
+      <p>Работы этой вставки уже меняли: {pending.changed.join("; ")}. Отменить вставку всё равно? Будут удалены все {pending.present} {pluralRu(pending.present, "работа", "работы", "работ")} этой вставки.</p>
+      <div className="project-actions"><button type="button" className="secondary" id="import-undo-keep" autoFocus onClick={onKeep}>Не отменять</button>
+        <button type="button" className="danger" id="import-undo-confirm" onClick={() => onUndo(pending.batch, true)}>Удалить работы вставки</button></div>
+    </div> : batch && <div className="pp-ghost" role="status"><Sign tone="plain">Вставлено из таблицы: {present} {pluralRu(present, "работа", "работы", "работ")} {batch.mark === "plan" ? "в план квартала" : "на рассмотрение"}{elsewhere}.</Sign>
+      <button type="button" className="project-link-button" id="import-undo" onClick={() => onUndo(batch)}>Отменить вставку</button></div>}
+    {waiting.map(([key, draft]) => {
+      // The window the import was started from, not the default source chosen inside it.
+      const source = draft.openedFrom ? snapshot.directions.find((direction) => direction.id === draft.openedFrom) : undefined;
+      const count = pendingRowCount(draft);
+      return <div key={key} className="pp-ghost"><Sign tone="unknown">{count} {pluralRu(count, "строка", "строки", "строк")} из таблицы ещё не {pluralRu(count, "добавлена", "добавлены", "добавлены")}{sourceId === null && source ? ` в «${source.name.trim()}»` : ""}.</Sign>
+        <button type="button" className="project-link-button" onClick={() => onContinue(draft.openedFrom)}>Продолжить вставку</button></div>;
+    })}
+  </div>;
 }
 
 function Setup({ snapshot, result, onGoToTab }: Pick<PlanTabProps, "snapshot" | "result" | "onGoToTab">) {
@@ -125,7 +226,9 @@ function Setup({ snapshot, result, onGoToTab }: Pick<PlanTabProps, "snapshot" | 
   </section>;
 }
 
-function Overview({ planId, snapshot, result, workInputs, onOpen, onGoToTab }: PlanTabProps & { onOpen: (id: string) => void }) {
+function Overview({ planId, snapshot, result, workInputs, onOpen, onImport, importLine }: PlanTabProps & {
+  onOpen: (id: string) => void; onImport: () => void; importLine: ReactNode;
+}) {
   const allocation = result ? describeAllocation(result) : null;
   const workSources = snapshot.directions.filter((direction) => direction.kind === "work");
   const noWorks = workSources.length > 0 && !snapshot.tasks.length;
@@ -135,8 +238,9 @@ function Overview({ planId, snapshot, result, workInputs, onOpen, onGoToTab }: P
   };
   return <>
     <div className="project-section-heading"><div><h2>Источники работ <InfoHint info="source" /></h2>
-      <p>Квоты на квартал и сколько из них уже занято по оценкам работ в часах. Откройте источник, чтобы посмотреть и включить работы.</p></div>
-      <button type="button" className="secondary" onClick={() => onGoToTab("sources")}>Источники и доли</button></div>
+      <p>Откройте источник, чтобы добавить работы или включить их в план квартала.</p></div>
+      {workSources.length > 0 && <button type="button" className="secondary" id="overview-import" onClick={onImport}>Вставить из таблицы</button>}</div>
+    {importLine}
     {noWorks && <div className="project-message" role="status">Источники и доли заданы, работ пока нет. Откройте источник и добавьте его работы.</div>}
     {!workSources.length && <div className="project-message" role="status">Пока заданы только резервы. Добавьте источник работ во вкладке «Источники и доли».</div>}
     <div className="data-table-wrap"><table className="project-table pp-overview" aria-label="Источники работ">
@@ -205,6 +309,8 @@ type WorkspaceProps = PlanTabProps & {
   setFresh: (fresh: { ids: string[]; label: string } | null) => void;
   setAdded: (added: { sourceId: string; text: string } | null) => void;
   setFocusTarget: (selector: string) => void;
+  onImport: (text: string | null) => void;
+  importLine: ReactNode;
 };
 
 type EditState = { id: string; name: string; estimate: string; link: string; comment: string; tried: boolean };
@@ -327,6 +433,8 @@ function SourceWorkspace(props: WorkspaceProps) {
   const restChanged = was && state && capacity?.quotaSet && (was.overrunHours !== state.overrunHours || !sameOnScreen(was.remainingHours, state.remainingHours));
   const formOpen = Boolean(input?.open);
   const draftClosed = input && !input.open && !isBlankWorkInput(input);
+  const waitingDraft = props.importDrafts[importDraftKey(planId, source.id)];
+  const waitingRows = waitingDraft ? pendingRowCount(waitingDraft) : 0;
 
   const undoLast = () => { props.onUndo(); setFocusTarget(input?.open ? "#add-name" : "#btn-add"); };
   const ghostAt = (mark: TaskMark) => ghost && ghost.sourceId === source.id && ghost.at?.mark === mark ? ghost : null;
@@ -385,7 +493,8 @@ function SourceWorkspace(props: WorkspaceProps) {
     </div>
     <section ref={head} className="pp-head" aria-labelledby="source-title">
       <div className="pp-head-top"><div className="pp-head-title"><h2 id="source-title" tabIndex={-1}>{source.name}</h2></div>
-        <div className="pp-actions"><button type="button" id="btn-add" onClick={openForm} disabled={formOpen}>{draftClosed ? "Продолжить ввод работы" : "Добавить работу"}</button></div></div>
+        <div className="pp-actions"><button type="button" id="btn-add" onClick={openForm} disabled={formOpen}>{draftClosed ? "Продолжить ввод работы" : "Добавить работу"}</button>
+          <button type="button" className="secondary" id="btn-import" onClick={() => props.onImport(null)}>{waitingRows ? `Продолжить вставку (${waitingRows})` : "Вставить из таблицы"}</button></div></div>
       <div className="pp-nums">
         <div className="pp-num"><span>Квота <InfoHint info="quota" /></span><strong>{capacity?.quotaSet ? hours(capacity.budgetHours) : "—"}</strong>
           <span className="pp-note">{!capacity?.quotaSet ? "доля не задана" : effective !== null ? `${formatPercent(effective)} доступной ёмкости` : ""}</span></div>
@@ -399,7 +508,7 @@ function SourceWorkspace(props: WorkspaceProps) {
       </div>
       <FillBar percent={fill} over={over} />
     </section>
-    {formOpen && input && <AddWorkForm key={key} source={source} capacity={capacity} input={input} works={list}
+    {formOpen && input && <AddWorkForm key={key} source={source} capacity={capacity} input={input} works={list} onPasteRows={(text) => props.onImport(text)}
       added={props.added?.sourceId === source.id ? props.added.text : null} canUndo={Boolean(undo)} onUndo={undoLast}
       onChange={(patch) => props.setWorkInput(key, { ...input, ...patch })}
       onClose={closeForm}
@@ -409,11 +518,13 @@ function SourceWorkspace(props: WorkspaceProps) {
         props.setWorkInput(key, { ...input, name: "", estimate: "", link: "", comment: "", mark: work.mark === "plan" ? "plan" : "candidate" });
         setFocusTarget("#add-name");
       }} />}
+    {props.importLine}
     <section className="pp-works" aria-label="Работы источника">
       {top}
       {!list.length ? <div className="pp-empty-source">
         <p>В источнике пока нет работ. {capacity?.quotaSet ? `Квота ${hours(capacity.budgetHours)} закреплена за ним и другим источникам не достаётся.` : "Долю источника можно задать позже во вкладке «Источники и доли»."}</p>
-        {!formOpen && <div className="project-actions"><button type="button" onClick={openForm}>Добавить работу</button></div>}
+        {!formOpen && <div className="project-actions"><button type="button" onClick={openForm}>Добавить работу</button>
+          <button type="button" className="secondary" onClick={() => props.onImport(null)}>Вставить строки из таблицы</button></div>}
       </div> : <>
         <div className="pp-group-head cand-head"><h3>На рассмотрении <InfoHint info="candidate" /></h3><span>{works(candidates.length)}</span></div>
         {candidates.length ? withGhost(candidates.map(row), "candidate") : <>{ghostAt("candidate") && ghostLine(ghostAt("candidate")!)}<p className="pp-empty-works">На рассмотрении работ нет. Новые работы источника по умолчанию попадают сюда.</p></>}
@@ -496,8 +607,10 @@ function checkWork(fields: { name: string; estimate: string; link: string; comme
   return errors;
 }
 
-function AddWorkForm({ source, capacity, input, works: existing, added, canUndo, onUndo, onChange, onClose, onClear, onAdd }: {
+function AddWorkForm({ source, capacity, input, works: existing, added, canUndo, onUndo, onChange, onClose, onClear, onAdd, onPasteRows }: {
   source: Direction; capacity: QuarterDirectionCapacity | undefined; input: WorkInput; works: readonly Work[];
+  /** Rows copied from a spreadsheet and pasted into «Название» open the import window. */
+  onPasteRows: (text: string) => void;
   added: string | null; canUndo: boolean; onUndo: () => void;
   onChange: (patch: Partial<WorkInput>) => void; onClose: () => void; onClear: () => void;
   onAdd: (work: Work, text: string) => void;
@@ -557,7 +670,7 @@ function AddWorkForm({ source, capacity, input, works: existing, added, canUndo,
       <label htmlFor="add-name">Название
         <input type="text" id="add-name" value={input.name} maxLength={QUARTER_INPUT_LIMITS.nameCharacters} autoComplete="off"
           aria-invalid={Boolean(shown("name"))} aria-describedby={shown("name") ? "add-name-error" : undefined}
-          onChange={(event) => onChange({ name: event.target.value })} />
+          onPaste={(event) => onNamePaste(event, onPasteRows)} onChange={(event) => onChange({ name: event.target.value })} />
         {shown("name") && <span className="project-field-error" id="add-name-error">{shown("name")}</span>}
         {duplicate && <Sign tone="unknown">Такая работа уже есть {MARK_PLACE[duplicate.mark]}.</Sign>}</label>
       <label htmlFor="add-estimate"><span>Полная оценка, ч <InfoHint info="estimate" /></span>

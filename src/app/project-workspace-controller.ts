@@ -11,6 +11,7 @@ import { validateQuarterSnapshot } from "../domain/capacity/quarter-snapshot.val
 import { buildQuarterReport, type QuarterReport } from "../export/quarter-report";
 import { saveReportFile, type ReportSaveOutcome } from "../export/report-file";
 import { renderQuarterReportXlsx } from "../export/xlsx";
+import { pendingRowCount, type ImportBatch, type ImportDraft } from "../import/work-import";
 import { pickProjectFolder } from "./folder-picker";
 import { describeValidationIssue } from "./validation-text";
 
@@ -89,6 +90,10 @@ export interface WorkspaceState {
   workInputs: Readonly<Record<string, WorkInput>>;
   /** The last «Куда добавить» per quarter and source, while the project is open (DEC-037). */
   lastMarks: Readonly<Record<string, WorkInput["mark"]>>;
+  /** Rows from a spreadsheet not added yet, per quarter and source (importDraftKey); never written to the file. */
+  importDrafts: Readonly<Record<string, ImportDraft>>;
+  /** Finished imports that «Отменить вставку» can still remove, newest last. */
+  importBatches: readonly ImportBatch[];
 }
 
 interface Dependencies {
@@ -109,7 +114,8 @@ interface Dependencies {
 function emptyState(): WorkspaceState {
   return { project: null, plans: [], activePlanId: null, draft: null, dirty: false,
     busy: false, closeProtectionReady: true, error: "", notice: "", warning: "", calculation: null, confirmation: null,
-    formatUpgrade: null, report: { available: false, hint: "" }, workInputs: {}, lastMarks: {} };
+    formatUpgrade: null, report: { available: false, hint: "" }, workInputs: {}, lastMarks: {},
+    importDrafts: {}, importBatches: [] };
 }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function projectName(name: string): string {
@@ -200,14 +206,25 @@ export class ProjectWorkspaceController {
    * forms and forms of sources deleted since are not listed.
    */
   private unfinishedInputs(): string[] {
-    return Object.values(this.state.workInputs).filter((input) => !isBlankWorkInput(input)).flatMap((input) => {
-      const quarter = input.planId === this.state.activePlanId ? this.state.draft
-        : this.state.plans.find((plan) => plan.planId === input.planId)?.snapshot;
+    const quarterOf = (planId: string) => planId === this.state.activePlanId ? this.state.draft
+      : this.state.plans.find((plan) => plan.planId === planId)?.snapshot;
+    const works = Object.values(this.state.workInputs).filter((input) => !isBlankWorkInput(input)).flatMap((input) => {
+      const quarter = quarterOf(input.planId);
       const source = quarter?.directions.find((direction) => direction.id === input.sourceId);
       if (quarter && !source) return [];
       const name = source?.name.trim() || input.sourceName;
       return [`«${name}», ${input.quarter}: ${input.name.trim() ? `«${input.name.trim()}»` : "работа без названия"}`];
     });
+    // Rows of an import that were not added (DEC-039): the clipboard may no longer hold them.
+    const imports = Object.values(this.state.importDrafts).flatMap((draft) => {
+      const count = pendingRowCount(draft);
+      const quarter = quarterOf(draft.planId);
+      if (!count || !quarter) return [];
+      const source = draft.openedFrom ? quarter.directions.find((direction) => direction.id === draft.openedFrom) : undefined;
+      const where = source ? `«${source.name.trim() || "Без названия"}»` : draft.openedFrom ? "удалённый источник" : "все источники";
+      return [`${where}, ${quarterTitle(quarter)}: строки из таблицы, ещё не добавленные: ${count}`];
+    });
+    return [...works, ...imports];
   }
 
   /**
@@ -338,7 +355,8 @@ export class ProjectWorkspaceController {
       this.pendingForms.clear();
       this.pendingMessages.clear();
       // A backup made while saving the previous project stays named until the user reads it.
-      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim(), workInputs: {}, lastMarks: {} });
+      this.publish({ project: clone(candidate.session), plans, notice: this.upgradeNotice.trim(), workInputs: {}, lastMarks: {},
+        importDrafts: {}, importBatches: [] });
       let preference: string | null = null;
       try { preference = this.deps.readSelectedPlan?.(candidate.session.projectId) ?? null; }
       catch { /* Optional application-local preference. */ }
@@ -486,6 +504,20 @@ export class ProjectWorkspaceController {
     rememberMark: (key: string, mark: WorkInput["mark"]): void => {
       if (!this.state.project) return;
       this.publish({ lastMarks: { ...this.state.lastMarks, [key]: mark } });
+    },
+    setImportDraft: (key: string, draft: ImportDraft | null): void => {
+      if (!this.state.project) return;
+      const importDrafts = { ...this.state.importDrafts };
+      if (draft) importDrafts[key] = draft; else delete importDrafts[key];
+      this.publish({ importDrafts });
+    },
+    /** Remembers a finished import for «Отменить вставку»; only the last few are kept. */
+    recordImportBatch: (batch: ImportBatch): void => {
+      if (!this.state.project) return;
+      this.publish({ importBatches: [...this.state.importBatches, batch].slice(-20) });
+    },
+    forgetImportBatch: (id: string): void => {
+      this.publish({ importBatches: this.state.importBatches.filter((batch) => batch.id !== id) });
     },
     answerDiscard: (answer: DiscardAnswer): void => {
       const resolve = this.resolveDiscard;

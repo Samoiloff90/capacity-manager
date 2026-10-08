@@ -205,12 +205,16 @@ export type EstimateInput =
 // A size such as M or XL is not hours (DEC-041); Cyrillic М, Х, С typed for Latin count too.
 const SIZE = /^(?:XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL)$/;
 
+/** A size such as «M» or «XL», in Latin or Cyrillic letters: never hours (DEC-041). */
+export function isSizeLabel(input: string): boolean {
+  return SIZE.test(input.trim().toUpperCase().replace(/М/g, "M").replace(/Х/g, "X").replace(/С/g, "S"));
+}
+
 /** «Полная оценка, ч»: «28», «12,5», «12.5», «28 ч». Empty is «Без оценки», not 0 (DEC-043). */
 export function parseEstimateInput(input: string): EstimateInput {
   const text = input.trim();
   if (!text) return { kind: "empty" };
-  const latin = text.toUpperCase().replace(/М/g, "M").replace(/Х/g, "X").replace(/С/g, "S");
-  if (SIZE.test(latin)) return { kind: "invalid", message: `«${text}» — размер, а нужны часы. Размеры в часы не переводятся.` };
+  if (isSizeLabel(text)) return { kind: "invalid", message: `«${text}» — размер, а нужны часы. Размеры в часы не переводятся.` };
   const number = text.replace(/\s*(?:ч|час|часа|часов|h)\.?$/i, "");
   let hours: string | null;
   try { hours = normalizeUserDecimal(number); }
@@ -257,4 +261,41 @@ export function describeRestAfterInclusion(source: QuarterDirectionCapacity, est
   return overrun(after)
     ? `Перебор квоты: ${lowerBound(after)}${formatDeficitHours(after.overrunHours, format)}.`
     : `Остаток квоты: ${upperBound(after)}${format(after.remainingHours)}.`;
+}
+
+export type BatchEffect = { text: string; tone: "over" | "fits" | "unknown" };
+
+/**
+ * What the source's plan becomes if several works enter it at once (QUARTER_PLANNING_UX.md,
+ * «Вставка строк из таблицы»): «Перебор квоты вырастет с 40 ч до не менее 172 ч.» or
+ * «Остаток квоты станет 22 ч (сейчас 50 ч).»
+ */
+export function describeBatchInclusion(source: QuarterDirectionCapacity, estimates: readonly (string | null)[], format: HoursFormatter): BatchEffect {
+  if (!source.quotaSet) return { text: "Доля источника не задана: остаток появится, когда будет задана доля.", tone: "unknown" };
+  const before = sourceState(source);
+  const after = forecastSource(source, { add: estimates });
+  const now = overrun(before)
+    ? `перебор ${lowerBound(before)}${formatDeficitHours(before.overrunHours, format)}`
+    : `остаток ${upperBound(before)}${format(before.remainingHours)}`;
+  if (overrun(after)) {
+    const value = `${lowerBound(after)}${formatDeficitHours(after.overrunHours, format)}`;
+    if (!overrun(before)) return { text: `Квота будет превышена: перебор ${value} (сейчас ${now}).`, tone: "over" };
+    return after.overrunHours === before.overrunHours
+      ? { text: `Перебор квоты останется ${value}.`, tone: "over" }
+      : { text: `Перебор квоты вырастет с ${lowerBound(before)}${formatDeficitHours(before.overrunHours, format)} до ${value}.`, tone: "over" };
+  }
+  return {
+    text: `Остаток квоты станет ${upperBound(after)}${format(after.remainingHours)} (сейчас ${now}).`,
+    tone: after.missingEstimateCount > 0 ? "unknown" : "fits"
+  };
+}
+
+/** Known hours of several works and how many have no estimate: «132 ч и 2 без оценки». */
+export function sumEstimates(estimates: readonly (string | null)[]): { knownHours: string; missing: number } {
+  let known: ExactDecimal = zero;
+  let missing = 0;
+  for (const estimate of estimates) {
+    if (estimate === null) missing += 1; else known = addDecimal(known, parseDecimal(estimate));
+  }
+  return { knownHours: decimalToString(known), missing };
 }

@@ -4,6 +4,7 @@ import {
 } from "../src/app/project-workspace-controller";
 import type { QuarterReport } from "../src/export/quarter-report";
 import type { ReportSaveOutcome } from "../src/export/report-file";
+import { createImportDraft, importDraftKey } from "../src/import/work-import";
 import { ProjectPersistenceError, type FormatUpgrade, type ProjectSession, type StoredQuarterPlan } from "../src/db/project-snapshots";
 import type { Quarter } from "../src/domain/capacity/calendar-quarter";
 import { createQuarterCalendar } from "../src/domain/capacity/project-calendar";
@@ -1029,6 +1030,43 @@ describe("quarter planner session memory and save warnings (QUARTER_PLANNING_UX.
     expect(await controller.actions.openProject(folderB)).toBe(true);
     expect(controller.getSnapshot().confirmation).toBeNull();
     expect(controller.getSnapshot()).toMatchObject({ workInputs: {}, lastMarks: {} });
+  });
+
+  it("keeps rows of an import that were not added and names them before the project closes (DEC-039, DEC-050)", async () => {
+    const { controller } = workspace(withSource());
+    await controller.actions.openProject(folderA);
+    await controller.actions.selectPlan("q1");
+    const snapshot = controller.getSnapshot().draft!;
+    const draft = createImportDraft({ planId: "q1", sourceId: "ui", text: "Название\tОценка\nОтчёт\tM\nСправочник\t\n", snapshot });
+    const importKey = importDraftKey("q1", "ui");
+    controller.actions.setImportDraft(importKey, draft);
+    const overview = createImportDraft({ planId: "q1", sourceId: null, text: "Склад\t4\n", snapshot });
+    controller.actions.setImportDraft(importDraftKey("q1", null), overview);
+    // Rows waiting in the window are not part of the quarter: nothing to save, another quarter keeps them.
+    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(await controller.actions.selectPlan("q2")).toBe(true);
+    expect(controller.getSnapshot().importDrafts[importKey]).toBe(draft);
+
+    const closing = controller.actions.closeProject();
+    await vi.waitFor(() => expect(controller.getSnapshot().confirmation?.details).toEqual([
+      "«Запросы УИ», 1 квартал 2026 года: строки из таблицы, ещё не добавленные: 2",
+      "все источники, 1 квартал 2026 года: строки из таблицы, ещё не добавленные: 1"
+    ]));
+    controller.actions.answerDiscard(true);
+    expect(await closing).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({ importDrafts: {}, importBatches: [] });
+  });
+
+  it("remembers finished imports for «Отменить вставку» until another project opens", async () => {
+    const { controller } = workspace();
+    await controller.actions.openProject(folderA);
+    const batch = { id: "b1", planId: "q1", mark: "candidate" as const, works: [] };
+    controller.actions.recordImportBatch(batch);
+    controller.actions.recordImportBatch({ ...batch, id: "b2" });
+    controller.actions.forgetImportBatch("b1");
+    expect(controller.getSnapshot().importBatches.map((item) => item.id)).toEqual(["b2"]);
+    expect(await controller.actions.openProject(folderB)).toBe(true);
+    expect(controller.getSnapshot().importBatches).toEqual([]);
   });
 
   it("a save with an overrun and shares above 100% names both next to the notice; the plan is saved as is", async () => {

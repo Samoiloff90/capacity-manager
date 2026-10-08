@@ -123,8 +123,11 @@ export function restoreFocus(element: HTMLElement | null) {
 export function useDialogFocus(dialog: RefObject<HTMLElement>, initial: RefObject<HTMLElement>, onEscape: () => void) {
   const escape = useRef(onEscape);
   escape.current = onEscape;
+  // The opener, taken on the first render: by the time effects run, autoFocus inside the
+  // dialog has already moved the focus away from it.
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous = opener;
     initial.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); escape.current(); return; }
@@ -143,7 +146,7 @@ export function useDialogFocus(dialog: RefObject<HTMLElement>, initial: RefObjec
       node?.removeEventListener("keydown", onKey);
       restoreFocus(previous);
     };
-  }, [dialog, initial]);
+  }, [dialog, initial, opener]);
 }
 
 /** Id of the layer next to the page: while a dialog is open there, the page behind it is inert. */
