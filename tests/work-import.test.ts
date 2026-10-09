@@ -343,7 +343,8 @@ describe("the chosen source is never replaced (R-004, R-005)", () => {
     const draft = draftOf("Название\tОценка, ч\tИсточник\nСверка\t6\tЗапросы УИ\n", "src-twin");
     const row = rowAt(previewImport(draft, snapshot).rows, 2);
     expect(row).toMatchObject({ sourceId: null, sourceHint: "«Запросы УИ» — несколько", blocked: true, checked: false });
-    expect(row.issues).toEqual([{ level: "error", field: "source", text: "Источников с названием «Запросы УИ» в квартале 2. Выберите нужный." }]);
+    expect(row.issues).toEqual([{ level: "error", field: "source",
+      text: "Источников с названием «Запросы УИ» в квартале 2. Выберите нужный — выбор подойдёт и для других строк с этим названием." }]);
     expect(applyImport(draft, snapshot, newId).works).toEqual([]);
     // The explicit choice decides; the old sources keep their names.
     const chosen = setRowSource(draft, 1, "src-twin");
@@ -356,9 +357,53 @@ describe("the chosen source is never replaced (R-004, R-005)", () => {
       { id: "src-tree", name: "Ёлка", percent: "1", kind: "work", memberPercents: [] }),
       { id: "src-tree2", name: "елка", percent: "1", kind: "work", memberPercents: [] });
     expect(rowAt(previewImport(draftOf("Название\tИсточник\nИгрушки\tЕЛКА\n"), snapshot).rows, 2).sourceHint).toBe("«ЕЛКА» — несколько");
-    // «Встречи и ритуалы» is a reserve: a source of works with the same name is the only place for works.
-    const sameAsReserve = withSource(currentDemoQuarter(), { id: "src-meet-works", name: "Встречи и ритуалы", percent: "1", kind: "work", memberPercents: [] });
-    expect(rowAt(previewImport(draftOf("Название\tИсточник\nДемо\tВстречи и ритуалы\n"), sameAsReserve).rows, 2).sourceId).toBe("src-meet-works");
+  });
+
+  describe("a name of a source of works and of a reserve (R-005, PO decision of 2026-10-09)", () => {
+    const sameAsReserve = () => withSource(currentDemoQuarter(),
+      { id: "src-meet-works", name: "встречи и ритуалы", percent: "1", kind: "work", memberPercents: [] });
+    const text = "Название\tОценка, ч\tИсточник\nДемо\t6\tВстречи и ритуалы\nРазбор\t4\tВстречи и ритуалы\nПрочее\t2\tТехдолг\n";
+
+    it("is explained and waits for a source of works; the reserve never receives works", () => {
+      const snapshot = sameAsReserve();
+      const draft = draftOf(text);
+      const row = rowAt(previewImport(draft, snapshot).rows, 2);
+      expect(row).toMatchObject({ sourceId: null, sourceHint: "«Встречи и ритуалы» — выберите источник работ", blocked: true, checked: false });
+      expect(row.issues).toEqual([{ level: "error", field: "source",
+        text: "«Встречи и ритуалы» — так называются источник работ и резерв. Резерв работы не принимает: выберите источник работ — выбор подойдёт и для других строк с этим названием." }]);
+      // Only the row of «Техдолг» goes; nothing is added to the reserve.
+      expect(applyImport(draft, snapshot, newId).works.map((work) => work.directionId)).toEqual(["src-debt"]);
+    });
+
+    it("one choice serves every row with that name in this paste; the preview and the add agree", () => {
+      const snapshot = sameAsReserve();
+      const chosen = setRowSource(draftOf(text), 1, "src-meet-works");
+      const rows = previewImport(chosen, snapshot).rows;
+      expect(rowAt(rows, 2)).toMatchObject({ sourceId: "src-meet-works", checked: true, issues: [] });
+      expect(rowAt(rows, 3)).toMatchObject({ sourceId: "src-meet-works", checked: true });
+      expect(rowAt(rows, 3).issues).toEqual([{ level: "note", field: "source",
+        text: "Источник выбран для «Встречи и ритуалы» в строке 2: встречи и ритуалы." }]);
+      expect(applyImport(chosen, snapshot, newId).works.map((work) => [work.name, work.directionId])).toEqual([
+        ["Демо", "src-meet-works"], ["Разбор", "src-meet-works"], ["Прочее", "src-debt"]
+      ]);
+    });
+
+    it("different choices for the same name do not decide the other rows", () => {
+      const snapshot = withSource(sameAsReserve(), { id: "src-meet-2", name: "Встречи и Ритуалы", percent: "1", kind: "work", memberPercents: [] });
+      const draft = draftOf("Название\tИсточник\nА\tВстречи и ритуалы\nБ\tВстречи и ритуалы\nВ\tВстречи и ритуалы\n");
+      const split = setRowSource(setRowSource(draft, 1, "src-meet-works"), 2, "src-meet-2");
+      const rows = previewImport(split, snapshot).rows;
+      expect([rowAt(rows, 2).sourceId, rowAt(rows, 3).sourceId, rowAt(rows, 4).sourceId]).toEqual(["src-meet-works", "src-meet-2", null]);
+      expect(rowAt(rows, 4).blocked).toBe(true);
+    });
+
+    it("a source the user chose for the row itself is used without asking again", () => {
+      const snapshot = sameAsReserve();
+      const rows = previewImport(setRowSource(draftOf(text), 2, "src-requests"), snapshot).rows;
+      expect(rowAt(rows, 3)).toMatchObject({ sourceId: "src-requests", checked: true, issues: [] });
+      // The window opened from a source does not decide a name of several sources.
+      expect(rowAt(rows, 2).blocked).toBe(true);
+    });
   });
 
   it("sources with the same name are listed with their place and share", () => {

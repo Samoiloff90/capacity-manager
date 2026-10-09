@@ -283,6 +283,22 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
   }
   const labels = sourceLabels(snapshot.directions);
   const sourceName = (id: string) => labels.get(id) ?? "Без названия";
+  // A name of several sources is resolved by the user (R-005): one of those sources of works,
+  // chosen in any row with that same value, serves every row with it, unless rows disagree.
+  // Another source chosen for a row is that row's own choice.
+  const confirmed = new Map<string, { ids: Set<string>; line: number }>();
+  if (sourceColumn >= 0) {
+    draft.cells.forEach((cells, index) => {
+      const chosen = draft.sources[index];
+      const key = normalizeName(cellAt(cells, sourceColumn).trim());
+      if ((draft.hasHeader && index === 0) || chosen === undefined || !key || (sourcesByName.get(key)?.length ?? 0) < 2) return;
+      const candidate = sourceById.get(chosen);
+      if (candidate?.kind !== "work" || normalizeName(candidate.name) !== key) return;
+      const known = confirmed.get(key) ?? { ids: new Set<string>(), line: draft.lines[index] ?? index + 1 };
+      known.ids.add(chosen);
+      confirmed.set(key, known);
+    });
+  }
 
   const byLink = new Map<string, Work>();
   const byExact = new Map<string, Work>();
@@ -335,8 +351,8 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
 
     // Sources are never created or swapped silently (DEC-050). A source chosen in the preview is
     // the only one checked: if it was deleted or became a reserve, the row waits for a new choice
-    // instead of falling back to its text or the open source. A name that fits several sources
-    // of works is not guessed either.
+    // instead of falling back to its text or the open source. A name of several sources — of
+    // works, or of works and a reserve — is not guessed either (R-005).
     let sourceId: string | null = null;
     let sourceHint = "— выберите —";
     const sourceError = (text: string, hint: string) => {
@@ -350,11 +366,16 @@ export function previewImport(draft: ImportDraft, snapshot: Snapshot): ImportPre
       else if (direction) sourceError(`Выбранный источник «${sourceName(chosen)}» стал резервом: работы в него не добавляются. Выберите источник работ.`, `«${sourceName(chosen)}» — резерв`);
       else sourceError("Выбранный источник удалён из квартала. Выберите источник.", "— выбранный удалён —");
     } else if (sourceColumn >= 0 && sourceText) {
-      const found = sourcesByName.get(normalizeName(sourceText)) ?? [];
+      const key = normalizeName(sourceText);
+      const found = sourcesByName.get(key) ?? [];
       const forWorks = found.filter((direction) => direction.kind === "work");
-      // A reserve takes no works, so a reserve of the same name does not make the name ambiguous.
-      if (forWorks.length === 1) sourceId = forWorks[0].id;
-      else if (forWorks.length > 1) sourceError(`Источников с названием «${sourceText}» в квартале ${forWorks.length}. Выберите нужный.`, `«${sourceText}» — несколько`);
+      const decided = confirmed.get(key);
+      if (found.length === 1 && forWorks.length === 1) sourceId = forWorks[0].id;
+      else if (found.length > 1 && decided?.ids.size === 1) {
+        sourceId = [...decided.ids][0];
+        issues.push({ level: "note", field: "source", text: `Источник выбран для «${sourceText}» в строке ${decided.line}: ${sourceName(sourceId)}.` });
+      } else if (forWorks.length > 1) sourceError(`Источников с названием «${sourceText}» в квартале ${forWorks.length}. Выберите нужный — выбор подойдёт и для других строк с этим названием.`, `«${sourceText}» — несколько`);
+      else if (forWorks.length === 1) sourceError(`«${sourceText}» — так называются источник работ и резерв. Резерв работы не принимает: выберите источник работ — выбор подойдёт и для других строк с этим названием.`, `«${sourceText}» — выберите источник работ`);
       else if (found.length) sourceError(`«${sourceText}» — резерв: работы в него не добавляются. Выберите источник работ.`, `«${sourceText}» — резерв`);
       else sourceError(`Источника «${sourceText}» нет в этом квартале. Источники при загрузке не создаются: выберите существующий.`, `«${sourceText}» — нет такого`);
     } else if (draft.sourceId) {
