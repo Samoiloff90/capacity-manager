@@ -28,11 +28,11 @@ public static class FolderDlg {
     EnumChildWindows(dialog, (h, l) => { if (GetDlgCtrlID(h) == id && Cls(h) == "Button") { found = h; return false; } return true; }, IntPtr.Zero);
     return found;
   }
-  // The visible "Folder:" box: an Edit inside a ComboBox.
+  // The visible "Folder:" box of the folder picker: Edit 1152 of the dialog (edt1).
   public static IntPtr FolderBox(IntPtr dialog) {
     IntPtr found = IntPtr.Zero;
     EnumChildWindows(dialog, (h, l) => {
-      if (Cls(h) == "Edit" && IsWindowVisible(h) && Cls(GetParent(h)) == "ComboBox") { found = h; return false; }
+      if (Cls(h) == "Edit" && GetDlgCtrlID(h) == 1152 && IsWindowVisible(h)) { found = h; return false; }
       return true;
     }, IntPtr.Zero);
     return found;
