@@ -1,16 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Local main window: project lifecycle and SQL, directory selection, native report save command and guarded close",
+  "description": "Local main window: project lifecycle and SQL limited by the native store, native folder choice, native report save command and guarded close",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-close",
     "core:window:allow-destroy",
-    "dialog:allow-open",
     "sql:allow-execute",
     "sql:allow-select",
+    "allow-project-pick-folder",
     "allow-project-create",
     "allow-project-open",
     "allow-project-close",

@@ -1,8 +1,13 @@
 //! Production IPC and desktop policy shared with the MockRuntime integration test.
-use super::{FormatUpgrade, ProjectSession, ProjectStore};
+use super::{FolderPurpose, FormatUpgrade, ProjectSession, ProjectStore};
 use std::path::PathBuf;
 use tauri::{App, Runtime, State, Webview, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_sql::DbInstances;
+
+/// The window may open or create a project only in the folder the user has just chosen in
+/// the system dialog (Q-001): a path written by a script is refused.
+const NOT_CHOSEN: &str = "Папку проекта нужно выбрать в окне выбора папки.";
 
 /// Both the webview and its host window must be the configured main window.
 fn is_main(view_label: &str, window_label: &str) -> bool {
@@ -18,6 +23,38 @@ pub(crate) fn require_main<R: Runtime>(view: &Webview<R>) -> Result<(), String> 
     }
 }
 
+/// Shows the system folder dialog on the native side and remembers the choice for one
+/// open or create; None when the user cancels.
+#[tauri::command]
+pub async fn project_pick_folder<R: Runtime>(
+    view: Webview<R>,
+    store: State<'_, ProjectStore>,
+    purpose: FolderPurpose,
+) -> Result<Option<String>, String> {
+    require_main(&view)?;
+    store.forget_choice();
+    let window = view.window();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title(purpose.dialog_title())
+        .pick_folder(move |folder| {
+            let _ = sender.send(folder);
+        });
+    let folder = match receiver.await {
+        Ok(Some(folder)) => folder
+            .into_path()
+            .map_err(|_| "Не удалось определить выбранную папку.".to_string())?,
+        Ok(None) => return Ok(None),
+        Err(_) => return Err("Окно выбора папки недоступно.".into()),
+    };
+    let folder = folder.to_string_lossy().into_owned();
+    store.remember_choice(purpose, &folder);
+    Ok(Some(folder))
+}
+
 #[tauri::command]
 pub async fn project_create<R: Runtime>(
     view: Webview<R>,
@@ -27,6 +64,9 @@ pub async fn project_create<R: Runtime>(
     name: String,
 ) -> Result<ProjectSession, String> {
     require_main(&view)?;
+    if !store.take_choice(FolderPurpose::Create, &folder_path) {
+        return Err(NOT_CHOSEN.into());
+    }
     store
         .create(&instances, PathBuf::from(folder_path), name)
         .await
@@ -41,6 +81,9 @@ pub async fn project_open<R: Runtime>(
     folder_path: String,
 ) -> Result<ProjectSession, String> {
     require_main(&view)?;
+    if !store.take_choice(FolderPurpose::Open, &folder_path) {
+        return Err(NOT_CHOSEN.into());
+    }
     store
         .open(&instances, PathBuf::from(folder_path))
         .await
@@ -87,6 +130,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
+            project_pick_folder,
             project_create,
             project_open,
             project_close,

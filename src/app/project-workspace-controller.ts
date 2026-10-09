@@ -12,7 +12,7 @@ import { buildQuarterReport, type QuarterReport } from "../export/quarter-report
 import { saveReportFile, type ReportSaveOutcome } from "../export/report-file";
 import { renderQuarterReportXlsx } from "../export/xlsx";
 import { pendingRowCount, type ImportBatch, type ImportDraft } from "../import/work-import";
-import { pickProjectFolder } from "./folder-picker";
+import { pickProjectFolder, type FolderPurpose } from "./folder-picker";
 import { describeValidationIssue } from "./validation-text";
 
 /** Pending-form key of the team rename form; it blocks saving and the report. */
@@ -138,7 +138,7 @@ interface Dependencies {
   createProject: (folderPath: string, name: string) => Promise<WorkspaceRepository>;
   openProject: (folderPath: string) => Promise<WorkspaceRepository>;
   /** System folder dialog; null when cancelled. */
-  pickFolder: (title: string) => Promise<string | null>;
+  pickFolder: (purpose: FolderPurpose) => Promise<string | null>;
   id: () => string;
   now: () => Date;
   renderReport: (report: QuarterReport) => Promise<Uint8Array>;
@@ -404,9 +404,9 @@ export class ProjectWorkspaceController {
   }
 
   /** The folder dialog is part of the operation, so closing the window waits for it. */
-  private async pickFolder(title: string): Promise<string | null> {
+  private async pickFolder(purpose: FolderPurpose): Promise<string | null> {
     let folder: string | null;
-    try { folder = await this.deps.pickFolder(title); }
+    try { folder = await this.deps.pickFolder(purpose); }
     catch (error) {
       console.error(error);
       throw new Error("Не удалось выбрать папку. Попробуйте ещё раз.");
@@ -455,11 +455,11 @@ export class ProjectWorkspaceController {
     /** Asks for an empty folder, then creates the project there; cancelling returns false. */
     chooseAndCreateProject: (name: string): Promise<boolean> => this.run("transition", async () => {
       const trimmed = projectName(name);
-      const folder = await this.pickFolder("Выберите пустую папку для команды");
+      const folder = await this.pickFolder("create");
       return folder !== null && this.replaceProject(() => this.deps.createProject(folder, trimmed));
     }),
     chooseAndOpenProject: (): Promise<boolean> => this.run("transition", async () => {
-      const folder = await this.pickFolder("Выберите папку проекта");
+      const folder = await this.pickFolder("open");
       return folder !== null && this.replaceProject(() => this.deps.openProject(folder));
     }),
     closeProject: async (): Promise<boolean> => {

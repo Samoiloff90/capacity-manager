@@ -98,7 +98,7 @@ function workspace(repository = new MemoryRepository(), confirmDiscard?: (messag
   let nextId = 0;
   const dependencies = {
     createProject, openProject, id: () => `generated-${++nextId}`, confirmDiscard, confirmFormatUpgrade,
-    pickFolder: vi.fn(async (_title: string): Promise<string | null> => folderA),
+    pickFolder: vi.fn(async (_purpose: "open" | "create"): Promise<string | null> => folderA),
     readSelectedPlan: (projectId: string) => preferences.get(projectId) ?? null,
     writeSelectedPlan: (projectId: string, planId: string) => { preferences.set(projectId, planId); },
     now: () => new Date(2026, 9, 5, 9, 7),
@@ -910,11 +910,11 @@ describe("choosing the project folder", () => {
   it("creates or opens the project in the chosen folder", async () => {
     const { controller, dependencies } = workspace();
     expect(await controller.actions.chooseAndCreateProject("  Команда А  ")).toBe(true);
-    expect(dependencies.pickFolder).toHaveBeenLastCalledWith("Выберите пустую папку для команды");
+    expect(dependencies.pickFolder).toHaveBeenLastCalledWith("create");
     expect(dependencies.createProject).toHaveBeenCalledWith(folderA, "Команда А");
     dependencies.pickFolder.mockResolvedValueOnce(folderB);
     expect(await controller.actions.chooseAndOpenProject()).toBe(true);
-    expect(dependencies.pickFolder).toHaveBeenLastCalledWith("Выберите папку проекта");
+    expect(dependencies.pickFolder).toHaveBeenLastCalledWith("open");
     expect(dependencies.openProject).toHaveBeenCalledWith(folderB);
   });
 

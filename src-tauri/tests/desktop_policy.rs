@@ -120,9 +120,9 @@ fn production_configuration_has_no_preload_remote_capability_or_broad_permission
             "core:event:allow-unlisten",
             "core:window:allow-close",
             "core:window:allow-destroy",
-            "dialog:allow-open",
             "sql:allow-execute",
             "sql:allow-select",
+            "allow-project-pick-folder",
             "allow-project-create",
             "allow-project-open",
             "allow-project-close",
@@ -135,6 +135,11 @@ fn production_configuration_has_no_preload_remote_capability_or_broad_permission
         .iter()
         .any(|permission| permission.starts_with("fs:")));
     assert!(!permissions.contains("dialog:allow-save"));
+    // The folder of a project is chosen in the native dialog the store shows (Q-001):
+    // the WebView gets no dialog permission and cannot name a folder itself.
+    assert!(!permissions
+        .iter()
+        .any(|permission| permission.starts_with("dialog:")));
     let production = directives(config["app"]["security"]["csp"].as_str().unwrap());
     let development = directives(config["app"]["security"]["devCsp"].as_str().unwrap());
     assert_eq!(production["connect-src"], ["ipc:", "http://ipc.localhost"]);

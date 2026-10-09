@@ -5,12 +5,13 @@ pub mod commands;
 pub mod legacy_compat;
 mod preflight;
 mod schema;
+mod sql_guard;
 
 pub use schema::{
     APPLICATION_ID, DATABASE_NAME, LEGACY_SCHEMA_VERSION, PAYLOAD_VERSION, SCHEMA_VERSION,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous},
     Connection, SqlitePool,
@@ -80,6 +81,8 @@ pub struct FormatUpgrade {
 
 struct ActiveSession {
     pool: SqlitePool,
+    /// What the window may run on `pool` (Q-001); the store's own work is trusted.
+    guard: &'static sql_guard::SqlGuard,
     ownership: Option<preflight::Ownership>,
     /// The project database; its folder receives the format-1 backup.
     path: PathBuf,
@@ -157,6 +160,26 @@ fn start_cleanup(
 #[derive(Default)]
 pub struct ProjectStore {
     sessions: Mutex<HashMap<String, ActiveSession>>,
+    /// The folder the user has just chosen in the system dialog, and what for (Q-001).
+    chosen: std::sync::Mutex<Option<(FolderPurpose, String)>>,
+}
+
+/// What a folder chosen in the system dialog is for: the window may then open or create
+/// a project there once, and nowhere else (Q-001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderPurpose {
+    Open,
+    Create,
+}
+
+impl FolderPurpose {
+    pub fn dialog_title(self) -> &'static str {
+        match self {
+            FolderPurpose::Open => "Выберите папку проекта",
+            FolderPurpose::Create => "Выберите пустую папку для команды",
+        }
+    }
 }
 
 pub(super) fn connection_options(path: &Path, read_only: bool) -> SqliteConnectOptions {
@@ -172,12 +195,14 @@ pub(super) fn connection_options(path: &Path, read_only: bool) -> SqliteConnectO
     // rewrite the header of a file awaiting validation/recovery.
 }
 
-async fn pool(path: &Path) -> StoreResult<SqlitePool> {
+/// `guard`: the pool is given to the SQL plugin, so every connection gets the window's
+/// rules (Q-001). A staging pool that only the store uses has none.
+async fn pool(path: &Path, guard: Option<&'static sql_guard::SqlGuard>) -> StoreResult<SqlitePool> {
     Ok(SqlitePoolOptions::new()
         .max_connections(1)
         .min_connections(0)
         .acquire_timeout(Duration::from_secs(5))
-        .after_connect(|connection, _| {
+        .after_connect(move |connection, _| {
             Box::pin(async move {
                 let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
                     .fetch_one(&mut *connection)
@@ -186,6 +211,9 @@ async fn pool(path: &Path) -> StoreResult<SqlitePool> {
                 sqlx::query(&format!("PRAGMA max_page_count={pages}"))
                     .execute(&mut *connection)
                     .await?;
+                if let Some(guard) = guard {
+                    guard.install(connection).await?;
+                }
                 Ok(())
             })
         })
@@ -203,6 +231,7 @@ fn start_open(
     let resources = std::sync::Arc::new(std::sync::Mutex::new(Some(ownership)));
     let worker_resources = resources.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
+    let guard = sql_guard::SqlGuard::leaked();
     let spawned = std::thread::Builder::new()
         .name("capacity-open".into())
         .spawn(move || {
@@ -210,11 +239,12 @@ fn start_open(
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()?;
-                runtime.block_on(pool(&path))
+                runtime.block_on(pool(&path, Some(guard)))
             }));
             let result = match outcome {
                 Ok(Ok(pool)) => Ok(ActiveSession {
                     pool,
+                    guard,
                     ownership: worker_resources.lock().unwrap().take(),
                     path: path.clone(),
                     project_id: String::new(),
@@ -260,6 +290,7 @@ async fn prepare_create(
     id: String,
     name: String,
     fail_initialization: bool,
+    guard: &'static sql_guard::SqlGuard,
 ) -> StoreResult<SqlitePool> {
     let stage = preflight::ScratchDirectory::new_in(&directory)?;
     let staged_path = stage.path().join(DATABASE_NAME);
@@ -268,7 +299,8 @@ async fn prepare_create(
         .create_new(true)
         .open(&staged_path)?
         .sync_all()?;
-    let staged_pool = pool(&staged_path).await?;
+    // Only the store uses the staging pool: it creates the schema, nothing else runs there.
+    let staged_pool = pool(&staged_path, None).await?;
     let initialized = if fail_initialization {
         Err(StoreError::InvalidProject(
             "Имитированная ошибка создания".into(),
@@ -286,12 +318,30 @@ async fn prepare_create(
     let path = directory.join(DATABASE_NAME);
     fs::hard_link(&staged_path, &path)?;
     drop(stage);
-    pool(&path).await
+    pool(&path, Some(guard)).await
 }
 
 impl ProjectStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The folder the user chose in the system dialog; it replaces an earlier choice.
+    pub fn remember_choice(&self, purpose: FolderPurpose, folder: &str) {
+        *self.chosen.lock().unwrap() = Some((purpose, folder.to_owned()));
+    }
+
+    pub fn forget_choice(&self) {
+        self.chosen.lock().unwrap().take();
+    }
+
+    /// Takes the choice once: true only for the same folder and purpose.
+    pub fn take_choice(&self, purpose: FolderPurpose, folder: &str) -> bool {
+        self.chosen
+            .lock()
+            .unwrap()
+            .take()
+            .is_some_and(|(chosen_for, chosen)| chosen_for == purpose && chosen == folder)
     }
 
     /// Explicit creation requires an empty existing directory. We never reuse or
@@ -338,6 +388,7 @@ impl ProjectStore {
         let worker_name = name.clone();
         let worker_path = directory.join(DATABASE_NAME);
         let worker_project_id = id.clone();
+        let guard = sql_guard::SqlGuard::leaked();
         // A cancelled caller may receive no session, but leaves either no DB or
         // a complete valid project. The worker always closes its staging DB.
         let spawned = std::thread::Builder::new()
@@ -352,11 +403,13 @@ impl ProjectStore {
                         worker_id,
                         worker_name,
                         fail_initialization,
+                        guard,
                     ))
                 }));
                 let result = match outcome {
                     Ok(Ok(pool)) => Ok(ActiveSession {
                         pool,
+                        guard,
                         ownership: worker_resources.lock().unwrap().take(),
                         path: worker_path,
                         project_id: worker_project_id,
@@ -423,8 +476,10 @@ impl ProjectStore {
         // SQLite may now recover the owned hot journal; repeat full validation
         // before making the pool reachable through the plugin registry.
         let checked = {
-            let mut connection = active.pool.acquire().await?;
-            schema::validate(&mut connection).await
+            let mut trusted = active.guard.trust(active.pool.acquire().await?);
+            let checked = schema::validate(trusted.connection()).await;
+            trusted.finish().await?;
+            checked
         };
         let metadata = match checked {
             Ok(metadata)
@@ -471,9 +526,20 @@ impl ProjectStore {
             });
         }
         // The pool has one connection: no other SQL of this project runs meanwhile,
-        // so the file is idle and consistent while it is copied.
-        let mut connection = session.pool.acquire().await?;
-        let current = schema::validate(&mut connection).await?;
+        // so the file is idle and consistent while it is copied. The store's own
+        // statements run trusted; the window's rules come back with `finish` (Q-001).
+        let mut trusted = session.guard.trust(session.pool.acquire().await?);
+        let upgraded = Self::upgrade_on(session, trusted.connection(), fault).await;
+        trusted.finish().await?;
+        upgraded
+    }
+
+    async fn upgrade_on(
+        session: &mut ActiveSession,
+        connection: &mut sqlx::SqliteConnection,
+        fault: schema::UpgradeFault,
+    ) -> StoreResult<FormatUpgrade> {
+        let current = schema::validate(&mut *connection).await?;
         if current.id != session.project_id || current.schema_version != LEGACY_SCHEMA_VERSION {
             return Err(StoreError::InvalidProject(
                 "Проект изменился до обновления формата".into(),
@@ -494,7 +560,7 @@ impl ProjectStore {
             ))
         })?;
         let shown = backup::shown(&made);
-        schema::upgrade_from_v1(&mut connection, fault)
+        schema::upgrade_from_v1(&mut *connection, fault)
             .await
             .map_err(|error| {
                 StoreError::InvalidProject(format!(
@@ -504,7 +570,7 @@ impl ProjectStore {
         // Committed: the session follows the file even if the check below fails, so a
         // retry does not try to upgrade a file that is already format 2.
         session.schema_version = SCHEMA_VERSION;
-        let checked = schema::validate(&mut connection).await;
+        let checked = schema::validate(&mut *connection).await;
         if !matches!(&checked, Ok(upgraded) if upgraded.id == session.project_id && upgraded.schema_version == SCHEMA_VERSION)
         {
             let reason = checked

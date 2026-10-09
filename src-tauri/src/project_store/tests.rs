@@ -21,6 +21,28 @@ async fn registered(instances: &DbInstances, key: &str) -> SqlitePool {
     }
 }
 
+/// The store's own, trusted access to the only connection of an open session (Q-001):
+/// what a test sets up there (PRAGMAs, schema changes, a crash in a transaction) is not
+/// something the window may do through the SQL plugin.
+async fn trusted(store: &ProjectStore, key: &str) -> sql_guard::Trusted {
+    let (guard, pool) = {
+        let sessions = store.sessions.lock().await;
+        let session = sessions.get(key).unwrap();
+        (session.guard, session.pool.clone())
+    };
+    guard.trust(pool.acquire().await.unwrap())
+}
+
+/// Reads the project file through a separate read-only connection, as an outside observer.
+async fn observer(pool: &SqlitePool) -> SqliteConnection {
+    SqliteConnection::connect_with(&connection_options(
+        pool.connect_options().get_filename(),
+        true,
+    ))
+    .await
+    .unwrap()
+}
+
 fn contents(path: &Path) -> BTreeMap<String, Vec<u8>> {
     fs::read_dir(path)
         .unwrap()
@@ -70,38 +92,41 @@ fn native_path_registry_settings_and_stale_sessions() {
             .unwrap();
         let pool = registered(&instances, &first.session_key).await;
         assert_eq!(pool.options().get_max_connections(), 1);
+        // The settings of the session's own connection, read by the store, not by the window.
+        let mut checked = trusted(&store, &first.session_key).await;
         assert_eq!(
             sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
-                .fetch_one(&pool)
+                .fetch_one(checked.connection())
                 .await
                 .unwrap(),
             "delete"
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("PRAGMA synchronous")
-                .fetch_one(&pool)
+                .fetch_one(checked.connection())
                 .await
                 .unwrap(),
             3
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("PRAGMA foreign_keys")
-                .fetch_one(&pool)
+                .fetch_one(checked.connection())
                 .await
                 .unwrap(),
             1
         );
         let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
-            .fetch_one(&pool)
+            .fetch_one(checked.connection())
             .await
             .unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("PRAGMA max_page_count")
-                .fetch_one(&pool)
+                .fetch_one(checked.connection())
                 .await
                 .unwrap(),
             (preflight::MAX_PROJECT_BYTES / page_size as u64) as i64
         );
+        checked.finish().await.unwrap();
         assert!(!first.sqlite_version.is_empty());
         insert(&pool, "plan", 2026, 2, "сохранено").await;
         store.close(&instances, &first.session_key).await.unwrap();
@@ -385,9 +410,10 @@ fn migration_failure_rolls_back_schema_and_version_and_copy_reopens_independentl
         let (folder, store, instances, session) = new_project().await;
         let pool = registered(&instances, &session.session_key).await;
         insert(&pool, "q", 2026, 1, "original").await;
-        let mut connection = pool.acquire().await.unwrap();
+        let mut trusted = trusted(&store, &session.session_key).await;
+        let connection = trusted.connection();
         assert!(schema::migration_fixture(
-            &mut connection,
+            &mut *connection,
             &[
                 "CREATE TABLE added (id INTEGER)",
                 "INSERT INTO missing VALUES (1)"
@@ -409,7 +435,7 @@ fn migration_failure_rolls_back_schema_and_version_and_copy_reopens_independentl
                 .await
                 .unwrap();
         assert_eq!(count, 0);
-        drop(connection);
+        trusted.finish().await.unwrap();
         store.close(&instances, &session.session_key).await.unwrap();
         let copy = fixture();
         for entry in fs::read_dir(folder.path()).unwrap() {
@@ -477,11 +503,11 @@ fn process_fixture() {
             unreachable!("the upgrade must exit inside its transaction");
         }
         if role == "crash" {
-            let pool = registered(&instances, &session.session_key).await;
-            let mut connection = pool.acquire().await.unwrap();
-            connection.execute("PRAGMA cache_size=1").await.unwrap();
-            connection.execute("PRAGMA cache_spill=ON").await.unwrap();
-            connection.execute("BEGIN IMMEDIATE").await.unwrap();
+            let mut trusted = trusted(&store, &session.session_key).await;
+            let connection = trusted.connection();
+            (&mut *connection).execute("PRAGMA cache_size=1").await.unwrap();
+            (&mut *connection).execute("PRAGMA cache_spill=ON").await.unwrap();
+            (&mut *connection).execute("BEGIN IMMEDIATE").await.unwrap();
             let data = serde_json::json!({"year":2026,"quarter":1,"label":"uncommitted".repeat(50000)}).to_string();
             sqlx::query("UPDATE quarter_plans SET payload_json=?, revision=99 WHERE plan_id='q'").bind(data).execute(&mut *connection).await.unwrap();
             // Deliberately no Rust destructors/SQLite close: genuine hot journal.
@@ -602,10 +628,12 @@ fn size_limit_rejects_write_atomically_instead_of_unreadable_success() {
         insert(&pool, "q", 2026, 1, "before").await;
         // Same max_page_count mechanism as production, smaller to avoid allocating
         // 128 MiB in the regression test. It limits writes, not just later reads.
+        let mut trusted = trusted(&store, &session.session_key).await;
         sqlx::query("PRAGMA max_page_count=8")
-            .execute(&pool)
+            .execute(trusted.connection())
             .await
             .unwrap();
+        trusted.finish().await.unwrap();
         let payload =
             serde_json::json!({"year":2026,"quarter":1,"label":"x".repeat(65536)}).to_string();
         assert!(sqlx::query(
@@ -809,18 +837,19 @@ async fn rows(pool: &SqlitePool) -> Vec<QuarterRow> {
 }
 
 async fn versions(pool: &SqlitePool) -> (i64, Vec<i64>, String) {
+    let mut connection = observer(pool).await;
     let user: i64 = sqlx::query_scalar("PRAGMA user_version")
-        .fetch_one(pool)
+        .fetch_one(&mut connection)
         .await
         .unwrap();
     let payloads: Vec<i64> =
         sqlx::query_scalar("SELECT payload_version FROM quarter_plans ORDER BY plan_id")
-            .fetch_all(pool)
+            .fetch_all(&mut connection)
             .await
             .unwrap();
     let table: String =
         sqlx::query_scalar("SELECT sql FROM sqlite_schema WHERE name = 'quarter_plans'")
-            .fetch_one(pool)
+            .fetch_one(&mut connection)
             .await
             .unwrap();
     (user, payloads, table)
@@ -991,7 +1020,7 @@ fn failed_upgrade_rolls_back_and_keeps_the_checked_backup() {
         let leftovers: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM sqlite_schema WHERE name = 'quarter_plans_format1'",
         )
-        .fetch_one(&pool)
+        .fetch_one(&mut observer(&pool).await)
         .await
         .unwrap();
         assert_eq!(leftovers, 0);
