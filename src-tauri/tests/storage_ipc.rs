@@ -485,9 +485,16 @@ fn window_reaches_only_the_chosen_project_and_its_own_statements() {
         ("UPDATE project_meta SET project_id = 'чужой'", json!([])),
         ("UPDATE quarter_plans SET plan_id = 'другой'", json!([])),
         ("INSERT INTO project_meta (singleton, project_id, name, format_version) VALUES (2, 'x', 'y', 1)", json!([])),
+        // A transaction left open would hold the store's own work, such as a format upgrade.
+        ("BEGIN", json!([])),
+        ("SAVEPOINT extra", json!([])),
+        ("ANALYZE", json!([])),
+        ("REINDEX", json!([])),
+        ("CREATE VIRTUAL TABLE extra USING fts5(value)", json!([])),
     ] {
+        // Refused by the authorizer itself; the attach limit is tested in the store.
         let error = run(key, query, values).unwrap_err().to_string();
-        assert!(["not authorized", "authorization denied", "prohibited", "too many attached"]
+        assert!(["not authorized", "authorization denied"]
                 .iter()
                 .any(|refusal| error.contains(refusal)), "{query}: {error}");
     }
@@ -498,11 +505,19 @@ fn window_reaches_only_the_chosen_project_and_its_own_statements() {
         // The setup statement of every connection, prepared before the authorizer.
         "PRAGMA page_size",
         "PRAGMA database_list",
-        "SELECT load_extension('nonexistent')",
-        "SELECT * FROM other.secret",
+        "SELECT * FROM pragma_table_info('quarter_plans')",
+        "SELECT * FROM pragma_database_list",
     ] {
-        assert!(select(key, query).is_err(), "{query}");
+        let error = select(key, query).unwrap_err().to_string();
+        assert!(
+            ["not authorized", "prohibited"]
+                .iter()
+                .any(|refusal| error.contains(refusal)),
+            "{query}: {error}"
+        );
     }
+    // SQLite keeps extension loading off anyway; the authorizer refuses the function too.
+    assert!(select(key, "SELECT load_extension('nonexistent')").is_err());
     // Nothing outside was read into the window or changed; no copy was written.
     assert_eq!(std::fs::read(&outside).unwrap(), outside_bytes);
     assert_eq!(std::fs::read(&other_db).unwrap(), other_bytes);

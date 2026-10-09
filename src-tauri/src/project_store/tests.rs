@@ -1047,6 +1047,151 @@ fn failed_upgrade_rolls_back_and_keeps_the_checked_backup() {
 }
 
 #[test]
+fn failing_upgrades_write_one_backup_and_a_retry_reuses_it() {
+    run(async {
+        let (folder, _) = format1_project(LEGACY_ROWS).await;
+        let original = database(folder.path());
+        let store = ProjectStore::new();
+        let instances = DbInstances::default();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
+        // A script could fail the upgrade again and again (Q-001): one copy, not one per call.
+        for _ in 0..3 {
+            store
+                .upgrade_format_inner(&session.session_key, schema::UpgradeFault::Migration)
+                .await
+                .unwrap_err();
+        }
+        assert_eq!(
+            backups(folder.path()).len(),
+            1,
+            "{:?}",
+            backups(folder.path())
+        );
+        let upgraded = store.upgrade_format(&session.session_key).await.unwrap();
+        let names = backups(folder.path());
+        assert_eq!(
+            names.len(),
+            1,
+            "the retry reuses the checked copy: {names:?}"
+        );
+        assert!(upgraded.backup_path.unwrap().ends_with(&names[0]));
+        store.close(&instances, &session.session_key).await.unwrap();
+        assert_eq!(fs::read(folder.path().join(&names[0])).unwrap(), original);
+    });
+}
+
+#[test]
+fn a_project_changed_after_a_failed_upgrade_is_upgraded_after_reopening() {
+    run(async {
+        let (folder, _) = format1_project(LEGACY_ROWS).await;
+        let original = database(folder.path());
+        let store = ProjectStore::new();
+        let instances = DbInstances::default();
+        let session = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
+        store
+            .upgrade_format_inner(&session.session_key, schema::UpgradeFault::Migration)
+            .await
+            .unwrap_err();
+        // The window renames the format-1 project, as the application may, between attempts.
+        let pool = registered(&instances, &session.session_key).await;
+        sqlx::query("UPDATE project_meta SET name = $1 WHERE singleton = 1 AND project_id = $2")
+            .bind("Новое название")
+            .bind(&session.project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = store
+            .upgrade_format(&session.session_key)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("закройте его и откройте снова"), "{error}");
+        assert!(error.ends_with("Исходный файл не изменён."), "{error}");
+        assert_eq!(backups(folder.path()).len(), 1, "no copy without reopening");
+        assert_eq!(versions(&pool).await.0, LEGACY_SCHEMA_VERSION);
+        store.close(&instances, &session.session_key).await.unwrap();
+        let renamed = database(folder.path());
+        let reopened = store
+            .open(&instances, folder.path().to_owned())
+            .await
+            .unwrap();
+        store.upgrade_format(&reopened.session_key).await.unwrap();
+        store
+            .close(&instances, &reopened.session_key)
+            .await
+            .unwrap();
+        let mut copies: Vec<Vec<u8>> = backups(folder.path())
+            .iter()
+            .map(|name| fs::read(folder.path().join(name)).unwrap())
+            .collect();
+        copies.sort();
+        let mut expected = vec![original, renamed];
+        expected.sort();
+        assert_eq!(
+            copies, expected,
+            "the first copy stays, the reopened session made its own"
+        );
+    });
+}
+
+#[test]
+fn a_new_connection_of_the_session_gets_the_same_rules() {
+    run(async {
+        let (_folder, store, instances, session) = new_project().await;
+        let key = &session.session_key;
+        let pool = registered(&instances, key).await;
+        // A trusted scope dropped without `finish` closes the only connection; the pool then
+        // opens a new one, as after its 30-minute lifetime. A temporary table marks the first.
+        let mut first = trusted(&store, key).await;
+        sqlx::query("CREATE TEMP TABLE first_connection (value)")
+            .execute(first.connection())
+            .await
+            .unwrap();
+        drop(first);
+        let mut second = trusted(&store, key).await;
+        let marks: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM temp.sqlite_master WHERE name = 'first_connection'",
+        )
+        .fetch_one(second.connection())
+        .await
+        .unwrap();
+        assert_eq!(marks, 0, "a new connection");
+        // The limit holds even where the authorizer admits everything.
+        let error = sqlx::query("ATTACH DATABASE ':memory:' AS other")
+            .execute(second.connection())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("too many attached databases"), "{error}");
+        second.finish().await.unwrap();
+        for query in [
+            "ATTACH DATABASE ':memory:' AS other",
+            "PRAGMA user_version = 7",
+            "VACUUM",
+            "BEGIN",
+            "CREATE TABLE extra (value)",
+        ] {
+            let error = sqlx::query(query)
+                .execute(&pool)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("not authorized") || error.contains("authorization denied"),
+                "{query}: {error}"
+            );
+        }
+        store.close(&instances, key).await.unwrap();
+    });
+}
+
+#[test]
 fn upgrade_interrupted_by_a_process_crash_reopens_as_the_format1_project() {
     run(async {
         let big = "x".repeat(200_000);

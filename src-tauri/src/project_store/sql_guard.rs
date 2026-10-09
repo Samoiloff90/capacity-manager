@@ -7,7 +7,8 @@
 //! - the authorizer admits only what the application itself issues
 //!   (`src/db/project-snapshots.ts`): reading the project, adding a quarter, saving a
 //!   quarter with its revision and renaming the project. Schema changes, `PRAGMA`,
-//!   `DELETE` and reading SQLite's own tables are refused.
+//!   `DELETE`, transactions and reading SQLite's own tables are refused. A transaction
+//!   left open by the window would hold the store's own work, such as a format upgrade.
 //!
 //! The store's own work on that connection (validating a project, upgrading its format)
 //! runs in a trusted scope that only Rust can open, while it holds the connection.
@@ -142,7 +143,7 @@ pub(super) fn admitted(
 ) -> bool {
     let main = database == Some("main");
     match action {
-        ffi::SQLITE_SELECT | ffi::SQLITE_TRANSACTION | ffi::SQLITE_RECURSIVE => true,
+        ffi::SQLITE_SELECT | ffi::SQLITE_RECURSIVE => true,
         ffi::SQLITE_FUNCTION => {
             second.is_some_and(|name| !name.eq_ignore_ascii_case("load_extension"))
         }
@@ -229,6 +230,10 @@ mod tests {
             ),
             (ffi::SQLITE_FUNCTION, None, Some("load_extension"), None),
             (ffi::SQLITE_SAVEPOINT, Some("BEGIN"), Some("s"), None),
+            (ffi::SQLITE_TRANSACTION, Some("BEGIN"), None, None),
+            (ffi::SQLITE_TRANSACTION, Some("COMMIT"), None, None),
+            (ffi::SQLITE_ANALYZE, None, None, main),
+            (ffi::SQLITE_REINDEX, Some("quarter_plans_year"), None, main),
             (999, None, None, main),
         ] {
             assert!(

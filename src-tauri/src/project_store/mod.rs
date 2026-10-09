@@ -89,6 +89,9 @@ struct ActiveSession {
     project_id: String,
     /// Format of the file as opened: 1 until the first save upgrades it (DEC-044).
     schema_version: i64,
+    /// The checked format-1 backup this session made. A retry after a failed upgrade reuses
+    /// it, so failing upgrades cannot multiply copies of the project (Q-001).
+    backup: Option<PathBuf>,
 }
 
 impl Drop for ActiveSession {
@@ -249,6 +252,7 @@ fn start_open(
                     path: path.clone(),
                     project_id: String::new(),
                     schema_version: SCHEMA_VERSION,
+                    backup: None,
                 }),
                 Ok(Err(error)) => {
                     worker_resources.lock().unwrap().take();
@@ -414,6 +418,7 @@ impl ProjectStore {
                         path: worker_path,
                         project_id: worker_project_id,
                         schema_version: SCHEMA_VERSION,
+                        backup: None,
                     }),
                     Ok(Err(error)) => {
                         // Release before notifying the caller, so immediate retry
@@ -530,7 +535,9 @@ impl ProjectStore {
         // statements run trusted; the window's rules come back with `finish` (Q-001).
         let mut trusted = session.guard.trust(session.pool.acquire().await?);
         let upgraded = Self::upgrade_on(session, trusted.connection(), fault).await;
-        trusted.finish().await?;
+        // A failed clear closes the connection, so the window's rules hold either way. The
+        // caller needs the upgrade's own result: a committed upgrade with its backup.
+        let _ = trusted.finish().await;
         upgraded
     }
 
@@ -546,11 +553,24 @@ impl ProjectStore {
             ));
         }
         let made = async {
+            // One backup per session (Q-001): a retry reuses the checked copy while the file
+            // is the same. A file changed since then gets a new copy only after reopening,
+            // which needs the user's choice of the folder.
+            if let Some(path) = session.backup.as_ref().filter(|path| path.is_file()) {
+                return if backup::same_bytes(&session.path, path)? {
+                    Ok(path.clone())
+                } else {
+                    Err(StoreError::InvalidProject(
+                        "проект изменился после прошлой попытки обновления; закройте его и откройте снова".into(),
+                    ))
+                };
+            }
             let path = backup::create(&session.path, fault.fails_backup())?;
             if let Err(error) = backup::verify(&path, &session.project_id).await {
                 let _ = fs::remove_file(&path);
                 return Err(error);
             }
+            session.backup = Some(path.clone());
             Ok(path)
         }
         .await

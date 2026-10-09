@@ -53,7 +53,7 @@ fn today() -> (i64, u32, u32) {
     civil_from_days(seconds.div_euclid(86_400))
 }
 
-fn same_bytes(left: &Path, right: &Path) -> StoreResult<bool> {
+pub(super) fn same_bytes(left: &Path, right: &Path) -> StoreResult<bool> {
     let (mut a, mut b) = (File::open(left)?, File::open(right)?);
     if a.metadata()?.len() != b.metadata()?.len() {
         return Ok(false);
