@@ -14,7 +14,7 @@ DEC-054 и DEC-055 ([REQUIREMENTS.md](../../product/REQUIREMENTS.md)). Файл�
 | --- | --- |
 | Версия | `0.4.0-rc.2` — кандидат в релиз для перепроверки исправлений, не стабильный выпуск |
 | Ветка | `quarter-planner` |
-| Коммит | тег `v0.4.0-rc.2`; полный коммит — в разделе «Кандидат: файлы» ниже |
+| Коммит | `905f7586f7109edbfa47c658761f56f3bc6deb37`, тег `v0.4.0-rc.2` (код приложения тот же, что в `712ab19`) |
 | Приложение | «Capacity Planner RC», идентификатор `local.capacity-planner.alpha` (тестовый, ставится отдельно от 0.3.0, заменяет rc.1) |
 | Сборки | pre-release `v0.4.0-rc.2` — ссылка, запуск CI и SHA-256 файлов в разделе «Кандидат: файлы» ниже |
 | Прошлый кандидат | `0.4.0-rc.1`, коммит `dc6f0004f6a375d8af8338fd56249fec03e7df93` — тег и файлы не менялись |
@@ -212,7 +212,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\network-check-window
   и Apple в фоне (DEC-023).
 - **Windows, обнаруженные соединения:**
   - у процесса приложения внешних соединений нет;
-  - у WebView2 — `config.edge.skype.com` (конфигурация Edge);
+  - у WebView2 — `config.edge.skype.com` (конфигурация Edge) и, в части прогонов,
+    `edge.microsoft.com/componentupdater` (обновление компонентов WebView2);
   - одно TLS-соединение WebView2 с адресом Microsoft вне NetLog.
 - **Исследованный трафик.** В трафике, который записывает NetLog, меток данных команды нет,
   контрольная метка находится. Содержимое соединения вне NetLog не исследовано, поэтому
@@ -281,7 +282,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\network-check-window
 
 ### 0.4.0-rc.2
 
-Заполняется после публикации тега.
+- **Pre-release:** <https://github.com/Samoiloff90/capacity-manager/releases/tag/v0.4.0-rc.2>
+  — pre-release, не черновик, не «последний» (последнего релиза в репозитории нет).
+- **Исходники:** тег `v0.4.0-rc.2` (объект тега `473251cfe1700774b048dc9ae607899fff080fe4`)
+  указывает на коммит `905f7586f7109edbfa47c658761f56f3bc6deb37`.
+- **CI:**
+  - запуск тега 37908481721 — PASS: Windows, macOS, проверка файлов, публикация;
+  - запуск ветки на том же коммите 37907391785 — PASS.
+- **macOS:** «Capacity Planner RC.app», `local.capacity-planner.alpha`, версия
+  `0.4.0-rc.2`, arm64, подпись ad-hoc, без нотаризации (отметка CI). На раннере
+  приложение запущено и закрыто, наблюдение за сетью соединений не обнаружило. На Mac
+  пользователя не запускалось.
+- **Windows:** внутри ZIP — «Capacity Planner RC» 0.4.0-rc.2.
+- **Проверка файлов.** Скачаны без входа 2026-10-09. Суммы совпали с файлами `.sha256` и с
+  суммами GitHub, у .dmg — ещё и с отметкой CI.
+
+| Файл | SHA-256 |
+| --- | --- |
+| `Capacity-Planner-0.4.0-rc.2-macos-arm64.dmg` | `429fe84424bf0161f42d3f8399fceffe90c3e6fce903043925c4536470d6ed7d` |
+| `Capacity-Planner-0.4.0-rc.2-macos-arm64.zip` | `1f2e1b06383c0beb180319a520bd8edf7b31445d27a6d892dbb5e82557af8f02` |
+| `Capacity-Planner-0.4.0-rc.2-windows-x64-system-webview2.zip` | `a7d085285779fe9e18d7217819d888b9d1512898f200c4479a70c84049789524` |
+| `Capacity-Planner-0.4.0-rc.2-demo-projects.zip` | `38d3cd8443475b5deca11ac75977add3fcbdafee07816d0578b2dd1c7501450f` |
+| `capacity-network-watch-macos.sh` | `d082ff6dd7e771c1b906586e7475aaf174a2f39a05a75d009a33097ceebd6f04` (тот же, что в rc.1) |
+
+Проверка сети на ZIP релиза — RESPONSES.md, «Проверки цикла 2».
 
 ### 0.4.0-rc.1 (предыдущий кандидат, не меняется)
 
