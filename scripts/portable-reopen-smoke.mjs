@@ -9,6 +9,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, realpath, writeFile } from "
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inFolderDialog } from "./native-folder-dialog.mjs";
 
 assert.equal(process.argv.length, 4, "Expected <local CDP port> <successful workflow result.json>");
 const port = Number(process.argv[2]);
@@ -191,9 +192,6 @@ try {
       const raw = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
       const url = new URL(raw, location.href);
       const command = url.hostname === 'ipc.localhost' ? decodeURIComponent(url.pathname.slice(1)) : null;
-      if (command === 'plugin:dialog|open') return new Response(${JSON.stringify(JSON.stringify(copy))}, {
-        headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' }
-      });
       const result = await originalFetch.call(window, resource, options);
       if (command === 'project_open' && result.headers.get('Tauri-Response') === 'ok') {
         window.__portableReopenSession = await result.clone().json();
@@ -202,7 +200,10 @@ try {
     };
   })()`);
   stubInstalled = true;
+  // The copy is chosen in the native folder dialog of the store (Q-001).
+  const choosing = inFolderDialog("open", copy);
   await click("Открыть папку проекта");
+  await choosing;
   await waitFor("document.querySelector('.project-title h1')?.textContent === 'Переименованная команда' && Boolean(document.querySelector('.project-path'))", "copied project opened");
   const shownPath = await evaluate("document.querySelector('.project-path')?.textContent");
   assert.equal(relative(copy, shownPath), "", "The UI must open the new copy, not project A");

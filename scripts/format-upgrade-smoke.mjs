@@ -15,6 +15,7 @@ import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from "node:fs
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inFolderDialog } from "./native-folder-dialog.mjs";
 
 const [mode, portText, input] = process.argv.slice(2);
 assert(["upgrade", "legacy"].includes(mode) && portText && input, "Expected: upgrade|legacy <local CDP port> <path>");
@@ -81,7 +82,7 @@ async function pickFolder(folder) {
       const raw = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
       const url = new URL(raw, location.href);
       const command = url.hostname === 'ipc.localhost' ? decodeURIComponent(url.pathname.slice(1)) : null;
-      if (command === 'plugin:dialog|open') return new Response(${JSON.stringify(JSON.stringify(folder))}, {
+      if (command === 'plugin:dialog|open' && ${JSON.stringify(folder)} !== null) return new Response(${JSON.stringify(JSON.stringify(folder))}, {
         headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' }
       });
       const result = await originalFetch.call(window, resource, options);
@@ -91,8 +92,16 @@ async function pickFolder(folder) {
   })()`);
 }
 async function openProject(folder) {
-  await pickFolder(folder);
-  await click("Открыть папку проекта");
+  if (planner) {
+    // The new build (Q-001): only the folder chosen in its native dialog opens.
+    await pickFolder(null);
+    const choosing = inFolderDialog("open", folder);
+    await click("Открыть папку проекта");
+    await choosing;
+  } else {
+    await pickFolder(folder);
+    await click("Открыть папку проекта");
+  }
   await waitFor(`document.querySelector('.project-path')?.textContent === ${JSON.stringify(folder)}`, `opened ${folder}`);
 }
 async function selectQ4() {

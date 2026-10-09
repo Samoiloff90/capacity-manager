@@ -5,7 +5,8 @@
 // <demo dir> holds the fictional demo projects written by the store (cargo test --lib
 // write_demo_projects -- --ignored, CAPACITY_DEMO_OUT): Alpha-new-format and Beta-format-0.3.0.
 // Copies are made under src-tauri/target/planner-smoke-<time>; the demo folders are not opened.
-// Only the folder picker is replaced. Project files, SQL, the calculation and the UI are real.
+// Nothing is replaced: the folder is chosen in the native dialog of the store (Q-001, through
+// scripts/native-folder-dialog.mjs); project files, SQL, the calculation and the UI are real.
 // Section D puts the fictional import template (tests/fixtures/import-template.ts) on the real
 // Windows clipboard and pastes it with Ctrl+V into the running app.
 // Section E runs first: an unapplied change of an existing work (R-001) survives another tab,
@@ -16,6 +17,7 @@ import { cp, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promi
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inFolderDialog } from "./native-folder-dialog.mjs";
 
 const [portText, demoInput] = process.argv.slice(2);
 const port = Number(portText);
@@ -187,7 +189,8 @@ const importRow = (line) => evaluate(`(() => {
 })()`);
 const rowInput = (line, field) => `.pp-import-table tr[data-line="${line}"] [id^="import-${field}-"]`;
 
-async function pickFolder(folder) {
+/** Observes the real project_open/project_create answers for the session key; replaces nothing. */
+async function watchSessions() {
   await evaluate(`(() => {
     window.__plannerRestore?.();
     const originalFetch = window.fetch;
@@ -196,9 +199,6 @@ async function pickFolder(folder) {
       const raw = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
       const url = new URL(raw, location.href);
       const command = url.hostname === 'ipc.localhost' ? decodeURIComponent(url.pathname.slice(1)) : null;
-      if (command === 'plugin:dialog|open') return new Response(${js(JSON.stringify(folder))}, {
-        headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' }
-      });
       const result = await originalFetch.call(window, resource, options);
       if ((command === 'project_open' || command === 'project_create') && result.headers.get('Tauri-Response') === 'ok') window.__plannerSession = await result.clone().json();
       return result;
@@ -206,8 +206,10 @@ async function pickFolder(folder) {
   })()`);
 }
 async function openProject(folder) {
-  await pickFolder(folder);
+  await watchSessions();
+  const choosing = inFolderDialog("open", folder);
   await click("Открыть папку проекта");
+  await choosing;
   await waitFor(`document.querySelector('.project-path')?.textContent === ${js(folder)}`, `opened ${folder}`);
 }
 async function closeProject(answer) {
@@ -572,8 +574,10 @@ try {
   const fresh = join(root, "Новая команда");
   await mkdir(fresh);
   await type(".project-welcome input", "Команда проверки");
-  await pickFolder(fresh);
+  await watchSessions();
+  const creating = inFolderDialog("create", fresh);
   await click("Выбрать папку и создать");
+  await creating;
   await waitFor(`document.querySelector('.project-path')?.textContent === ${js(fresh)}`, "new project");
   await click("Новый квартал…");
   await waitFor("Boolean(document.querySelector('#new-quarter-title'))", "new quarter dialog");

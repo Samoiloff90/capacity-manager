@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inFolderDialog } from "./native-folder-dialog.mjs";
 
 const port = Number(process.argv[2] ?? 19324);
 // Network check (scripts/network-check-windows.ps1): unique strings in the team, member and
@@ -179,8 +180,9 @@ async function reopenProject() {
   await click("Закрыть проект");
   if (await evaluate("Boolean(document.querySelector('[role=alertdialog]'))")) await click("Не сохранять");
   await waitFor("Boolean(document.querySelector('.project-welcome'))");
-  await evaluate(`window.__smokeFolder = ${JSON.stringify(projectFolder)}`);
+  const choosing = inFolderDialog("open", projectFolder);
   await click("Открыть папку проекта");
+  await choosing;
   await waitFor(activeQuarter, "reopened Q4");
 }
 
@@ -223,9 +225,6 @@ try {
     window.fetch = async (resource, options) => {
       const url = new URL(typeof resource === 'string' ? resource : resource.url);
       const command = url.hostname === 'ipc.localhost' ? decodeURIComponent(url.pathname.slice(1)) : null;
-      if (command === 'plugin:dialog|open') return new Response(JSON.stringify(window.__smokeFolder ?? null), {
-        headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' }
-      });
       const response = await nativeFetch(resource, options);
       if ((command === 'project_create' || command === 'project_open') && response.headers.get('Tauri-Response') === 'ok') {
         window.__smokeSession = await response.clone().json();
@@ -233,9 +232,10 @@ try {
       return response;
     };
   })()`);
-  await evaluate(`window.__smokeFolder = ${JSON.stringify(projectFolder)}`);
   await input(".project-welcome input", marked("Тестовая команда: отчёт/Q4"));
+  const creating = inFolderDialog("create", projectFolder);
   await click("Выбрать папку и создать");
+  await creating;
   await click("Новый квартал…");
   await waitFor("Boolean(document.querySelector('.project-new-quarter'))", "new quarter dialog");
   await input(".project-new-quarter .project-year input", "2026");

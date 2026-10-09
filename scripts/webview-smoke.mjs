@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { inFolderDialog } from "./native-folder-dialog.mjs";
 
 const port = Number(process.argv[2] ?? 19323);
 const emulateOffline = process.env.CAPACITY_SMOKE_OFFLINE === "1";
@@ -181,7 +182,12 @@ async function capturePage(filename) {
     clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.ceil(size.height), scale: 1 } });
   await writeFile(resolve(root, filename), Buffer.from(screenshot.data, "base64"));
 }
-async function folder(value) { await evaluate(`window.__smokeFolder = ${JSON.stringify(value)}`); }
+/** The native folder dialog of the store (Q-001): chosen like a person would; null cancels. */
+async function chooseFolder(purpose, value, button) {
+  const choosing = inFolderDialog(purpose, value);
+  await click(button);
+  await choosing;
+}
 async function expectHours(text) {
   await waitFor(`document.querySelector('.project-totals-plan .project-total strong')?.textContent.replace(/\\u00a0/g, ' ') === ${JSON.stringify(text)}`, `capacity ${text}`);
 }
@@ -225,9 +231,6 @@ try {
     window.fetch = async (resource, options) => {
       const url = new URL(typeof resource === 'string' ? resource : resource.url);
       const command = url.hostname === 'ipc.localhost' ? decodeURIComponent(url.pathname.slice(1)) : null;
-      if (command === 'plugin:dialog|open') return new Response(JSON.stringify(window.__smokeFolder ?? null), {
-        headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' }
-      });
       const response = await nativeFetch(resource, options);
       if ((command === 'project_create' || command === 'project_open') && response.headers.get('Tauri-Response') === 'ok') {
         window.__smokeSession = await response.clone().json();
@@ -236,12 +239,10 @@ try {
     };
   })()`);
   // Cancelling the folder picker must be harmless.
-  await folder(null);
-  await click("Открыть папку проекта");
+  await chooseFolder("open", null, "Открыть папку проекта");
   assert(await evaluate("Boolean(document.querySelector('.project-welcome'))"));
-  await folder(folderA);
   await input(".project-welcome input", marked("Тестовая команда А"));
-  await click("Выбрать папку и создать");
+  await chooseFolder("create", folderA, "Выбрать папку и создать");
   await createQuarter(4);
   await expectHours("0 ч");
   await click("Добавить сотрудника");
@@ -377,9 +378,8 @@ try {
   await click("Закрыть проект");
   await waitFor("Boolean(document.querySelector('.project-welcome'))");
   // A second folder must have independent metadata, people and plans.
-  await folder(folderB);
   await input(".project-welcome input", marked("Тестовая команда Б"));
-  await click("Выбрать папку и создать");
+  await chooseFolder("create", folderB, "Выбрать папку и создать");
   await createQuarter(4);
   await expectHours("0 ч");
   await click("План квартала");
@@ -387,8 +387,7 @@ try {
   const secondProjectPlanId = await evaluate("document.querySelector('.project-plan-select select').value");
   assert.deepEqual((await readQuarter(secondProjectPlanId)).snapshot.tasks, []);
   await click("Закрыть проект");
-  await folder(folderA);
-  await click("Открыть папку проекта");
+  await chooseFolder("open", folderA, "Открыть папку проекта");
   await expectHours("252 ч");
   assert.equal(await evaluate("document.querySelector('.project-title h1').textContent"), "Переименованная команда");
   assert.equal(await evaluate("document.querySelector('.project-plan-select select').value"), q4);
